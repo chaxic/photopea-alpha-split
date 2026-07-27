@@ -2,6 +2,14 @@
 
 All notable changes to Alpha Split for Photopea are documented here.
 
+## [1.2.5] - 2026-07-27
+
+### Fixed
+
+- Preview hit-testing and hover tip stay aligned when the panel is resized
+  (canvas now fits the card with correct aspect ratio instead of CSS stretch).
+- Fill-mode outline is thicker and scales with display density.
+
 ## [1.2.4] - 2026-07-27
 
 ### Fixed

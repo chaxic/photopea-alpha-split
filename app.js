@@ -896,44 +896,89 @@ function updatePreviewHoverTip(hover, card) {
   const color = labelColor(state.scan, hover.label);
   tip.hidden = false;
   tip.innerHTML = `<span class="sample-swatch" style="background:rgb(${color[0]},${color[1]},${color[2]})" aria-hidden="true"></span><span>${escapeHtml(elementTitle(hover.label))}</span>`;
-  const cardRect = card.getBoundingClientRect();
   const tipWidth = tip.offsetWidth || 120;
   const tipHeight = tip.offsetHeight || 24;
-  let left = hover.tipX + 10;
-  let top = hover.tipY + 10;
-  left = Math.max(4, Math.min(left, cardRect.width - tipWidth - 4));
-  top = Math.max(4, Math.min(top, cardRect.height - tipHeight - 4));
+  let left = hover.tipX + 12;
+  let top = hover.tipY + 12;
+  left = Math.max(4, Math.min(left, card.clientWidth - tipWidth - 4));
+  top = Math.max(4, Math.min(top, card.clientHeight - tipHeight - 4));
   tip.style.left = `${left}px`;
   tip.style.top = `${top}px`;
 }
 
-function drawIslandOutline(ctx, islandMask, analysisW, analysisH, scale, dw, dh) {
+function fitPreviewLayout(card, analysisW, analysisH) {
+  const maxW = Math.max(1, Math.floor((card && card.clientWidth) || 320));
+  const maxH = Math.max(
+    1,
+    Math.floor((card && card.clientHeight) || Math.min(maxW, 240)),
+  );
+  const fit = Math.min(maxW / analysisW, maxH / analysisH);
+  const cssW = Math.max(1, Math.floor(analysisW * fit));
+  const cssH = Math.max(1, Math.floor(analysisH * fit));
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const dw = Math.max(1, Math.round(cssW * dpr));
+  const dh = Math.max(1, Math.round(cssH * dpr));
+  return {
+    cssW,
+    cssH,
+    dw,
+    dh,
+    scaleX: analysisW / dw,
+    scaleY: analysisH / dh,
+    outlineRadius: Math.max(1, Math.round(2.5 * dpr)),
+  };
+}
+
+function drawIslandOutline(
+  ctx,
+  islandMask,
+  analysisW,
+  analysisH,
+  scaleX,
+  scaleY,
+  dw,
+  dh,
+  outlineRadius,
+) {
   const imageData = ctx.getImageData(0, 0, dw, dh);
   const dst = imageData.data;
+  const radius = Math.max(1, outlineRadius | 0);
+
+  const inIsland = (sx, sy) => {
+    if (sx < 0 || sy < 0 || sx >= analysisW || sy >= analysisH) return false;
+    return !!islandMask[sy * analysisW + sx];
+  };
+
   const isEdge = (sx, sy) => {
-    const idx = sy * analysisW + sx;
-    if (!islandMask[idx]) return false;
-    if (sx === 0 || sy === 0 || sx === analysisW - 1 || sy === analysisH - 1) {
-      return true;
+    if (!inIsland(sx, sy)) return false;
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        if (!dx && !dy) continue;
+        if (!inIsland(sx + dx, sy + dy)) return true;
+      }
     }
-    return (
-      !islandMask[idx - 1] ||
-      !islandMask[idx + 1] ||
-      !islandMask[idx - analysisW] ||
-      !islandMask[idx + analysisW]
-    );
+    return false;
   };
 
   for (let py = 0; py < dh; py++) {
-    const srcY = Math.min(analysisH - 1, Math.floor(py / scale));
+    const srcY = Math.min(analysisH - 1, Math.floor(py * scaleY));
     for (let pxCol = 0; pxCol < dw; pxCol++) {
-      const srcX = Math.min(analysisW - 1, Math.floor(pxCol / scale));
+      const srcX = Math.min(analysisW - 1, Math.floor(pxCol * scaleX));
       if (!isEdge(srcX, srcY)) continue;
-      const dstOffset = (py * dw + pxCol) << 2;
-      dst[dstOffset] = 255;
-      dst[dstOffset + 1] = 255;
-      dst[dstOffset + 2] = 255;
-      dst[dstOffset + 3] = 255;
+      for (let oy = -radius; oy <= radius; oy++) {
+        const yy = py + oy;
+        if (yy < 0 || yy >= dh) continue;
+        for (let ox = -radius; ox <= radius; ox++) {
+          if (ox * ox + oy * oy > radius * radius) continue;
+          const xx = pxCol + ox;
+          if (xx < 0 || xx >= dw) continue;
+          const dstOffset = (yy * dw + xx) << 2;
+          dst[dstOffset] = 255;
+          dst[dstOffset + 1] = 255;
+          dst[dstOffset + 2] = 255;
+          dst[dstOffset + 3] = 255;
+        }
+      }
     }
   }
   ctx.putImageData(imageData, 0, 0);
@@ -948,30 +993,29 @@ function drawPreview(scan) {
   const height = scan.analysisHeight || scan.imageData.height;
   const labels = scan.labels;
   const imageData = scan.imageData;
-  const containerWidth = Math.max(
-    1,
-    Math.floor((card && card.clientWidth) || canvas.clientWidth || 320),
-  );
-  const scale = Math.min(1, containerWidth / Math.max(width, 1));
-  const dw = Math.max(1, Math.round(width * scale));
-  const dh = Math.max(1, Math.round(height * scale));
-  if (canvas.width !== dw || canvas.height !== dh) {
-    canvas.width = dw;
-    canvas.height = dh;
+  const layout = fitPreviewLayout(card, width, height);
+  scan.previewLayout = layout;
+
+  if (canvas.width !== layout.dw || canvas.height !== layout.dh) {
+    canvas.width = layout.dw;
+    canvas.height = layout.dh;
   }
+  canvas.style.width = `${layout.cssW}px`;
+  canvas.style.height = `${layout.cssH}px`;
+
   const ctx = canvas.getContext("2d");
-  const out = ctx.createImageData(dw, dh);
+  const out = ctx.createImageData(layout.dw, layout.dh);
   const src = imageData.data;
   const dst = out.data;
   const colors = scan.labelColors;
 
-  for (let py = 0; py < dh; py++) {
-    const srcY = Math.min(height - 1, Math.floor(py / scale));
-    for (let pxCol = 0; pxCol < dw; pxCol++) {
-      const srcX = Math.min(width - 1, Math.floor(pxCol / scale));
+  for (let py = 0; py < layout.dh; py++) {
+    const srcY = Math.min(height - 1, Math.floor(py * layout.scaleY));
+    for (let pxCol = 0; pxCol < layout.dw; pxCol++) {
+      const srcX = Math.min(width - 1, Math.floor(pxCol * layout.scaleX));
       const srcIndex = srcY * width + srcX;
       const srcOffset = srcIndex << 2;
-      const dstOffset = (py * dw + pxCol) << 2;
+      const dstOffset = (py * layout.dw + pxCol) << 2;
       const id = labels[srcIndex];
       if (!id) {
         dst[dstOffset] = src[srcOffset];
@@ -1001,9 +1045,11 @@ function drawPreview(scan) {
       state.previewHover.islandMask,
       width,
       height,
-      scale,
-      dw,
-      dh,
+      layout.scaleX,
+      layout.scaleY,
+      layout.dw,
+      layout.dh,
+      layout.outlineRadius,
     );
   }
 

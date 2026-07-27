@@ -1,6 +1,6 @@
 {
   "name": "photopea-alpha-split",
-  "version": "1.2.4",
+  "version": "1.2.5",
   "private": true,
   "description": "Photopea plugin that detects disconnected alpha regions and exports each as a cropped PNG.",
   "scripts": {
