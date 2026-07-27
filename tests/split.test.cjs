@@ -136,10 +136,12 @@ test("installer page loads zip-util and export wording", () => {
   assert.match(html, /zip-util\.js\?v=/);
   assert.match(html, /data-util\.js\?v=/);
   const app = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
+  const dataUtil = fs.readFileSync(path.join(__dirname, "..", "data-util.js"), "utf8");
   assert.match(app, /Export elements/);
   assert.match(app, /Assemble Elements/);
-  assert.match(app, /alpha-split-data\.json/);
-  assert.match(app, /AlphaSplit Data/);
+  assert.match(app, /DATA\.DATA_FILENAME|alpha-split-data\.json/);
+  assert.match(dataUtil, /AlphaSplit Data/);
+  assert.match(dataUtil, /alpha-split-data\.json/);
   assert.doesNotMatch(app, /Split into layers/);
   assert.doesNotMatch(app, /makePlaceLayerScript/);
   assert.match(app, /Randomize colors/);
