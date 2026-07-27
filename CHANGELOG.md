@@ -2,6 +2,26 @@
 
 All notable changes to Alpha Split for Photopea are documented here.
 
+## [1.2.0] - 2026-07-27
+
+### Added
+
+- Interactive preview editing: **Sample**, **Fill**, **New**, **Randomize colors**,
+  and **Update**.
+- Join elements by sampling one label and filling another island.
+- Separate islands by filling with a new label.
+- Responsive preview canvas that scales with the panel width.
+
+### Changed
+
+- Export propagates edited analysis labels to full resolution instead of
+  discarding preview edits.
+- Uncommitted preview edits must be committed with **Update** before Export.
+
+### Verification
+
+- Automated checks passed on 27 July 2026.
+
 ## [1.1.0] - 2026-07-27
 
 ### Changed

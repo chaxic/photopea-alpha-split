@@ -203,10 +203,265 @@
     return { ok: true };
   }
 
+  /**
+   * Rebuild component metadata from an existing label map.
+   * Keeps stable label IDs so display colours stay consistent.
+   */
+  function buildComponentsFromLabels(labels, width, height, minSize) {
+    var n = width * height;
+    var sizes = new Map();
+    var bounds = new Map();
+    var i;
+    var x;
+    var y;
+    var id;
+
+    for (i = 0; i < n; i++) {
+      id = labels[i];
+      if (!id) continue;
+      sizes.set(id, (sizes.get(id) || 0) + 1);
+      x = i % width;
+      y = (i / width) | 0;
+      var b = bounds.get(id);
+      if (!b) {
+        bounds.set(id, { minX: x, minY: y, maxX: x, maxY: y });
+      } else {
+        if (x < b.minX) b.minX = x;
+        if (y < b.minY) b.minY = y;
+        if (x > b.maxX) b.maxX = x;
+        if (y > b.maxY) b.maxY = y;
+      }
+    }
+
+    var components = [];
+    sizes.forEach(function (size, labelId) {
+      if (size < minSize) return;
+      var box = bounds.get(labelId);
+      components.push({
+        id: labelId,
+        size: size,
+        minX: box.minX,
+        minY: box.minY,
+        maxX: box.maxX,
+        maxY: box.maxY,
+      });
+    });
+
+    components.sort(function (a, b) {
+      return a.minY - b.minY || a.minX - b.minX || a.id - b.id;
+    });
+
+    return components;
+  }
+
+  /**
+   * Flood-fill contiguous pixels that share the seed label.
+   * Returns a Uint8Array mask (1 = in island) and the seed label id.
+   */
+  function floodIsland(labels, width, height, x, y, eightConnected) {
+    var n = width * height;
+    var mask = new Uint8Array(n);
+    if (x < 0 || y < 0 || x >= width || y >= height) {
+      return { mask: mask, label: 0, size: 0 };
+    }
+    var start = y * width + x;
+    var seed = labels[start];
+    if (!seed) {
+      return { mask: mask, label: 0, size: 0 };
+    }
+
+    var stack = [start];
+    var size = 0;
+    mask[start] = 1;
+
+    while (stack.length) {
+      var i = stack.pop();
+      size += 1;
+      var cx = i % width;
+      var cy = (i / width) | 0;
+      var neighbors = [
+        [cx + 1, cy],
+        [cx - 1, cy],
+        [cx, cy + 1],
+        [cx, cy - 1],
+      ];
+      if (eightConnected) {
+        neighbors.push(
+          [cx + 1, cy + 1],
+          [cx - 1, cy + 1],
+          [cx + 1, cy - 1],
+          [cx - 1, cy - 1],
+        );
+      }
+      for (var nIdx = 0; nIdx < neighbors.length; nIdx++) {
+        var nx = neighbors[nIdx][0];
+        var ny = neighbors[nIdx][1];
+        if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+        var ni = ny * width + nx;
+        if (mask[ni]) continue;
+        if (labels[ni] !== seed) continue;
+        mask[ni] = 1;
+        stack.push(ni);
+      }
+    }
+
+    return { mask: mask, label: seed, size: size };
+  }
+
+  function relabelIsland(labels, islandMask, targetLabel) {
+    var changed = 0;
+    for (var i = 0; i < islandMask.length; i++) {
+      if (!islandMask[i]) continue;
+      labels[i] = targetLabel;
+      changed += 1;
+    }
+    return changed;
+  }
+
+  function nextLabelId(labels) {
+    var max = 0;
+    for (var i = 0; i < labels.length; i++) {
+      if (labels[i] > max) max = labels[i];
+    }
+    return max + 1;
+  }
+
+  /**
+   * Map analysis-resolution labels onto a full-resolution opaque mask.
+   * opaqueMask may be Uint8Array (1 = opaque) or derived from ImageData alpha.
+   */
+  function propagateLabelsToFullRes(
+    analysisLabels,
+    analysisW,
+    analysisH,
+    fullW,
+    fullH,
+    opaqueMask,
+  ) {
+    var full = new Int32Array(fullW * fullH);
+    var fx;
+    var fy;
+    for (fy = 0; fy < fullH; fy++) {
+      var ay = Math.min(
+        analysisH - 1,
+        Math.floor((fy * analysisH) / fullH),
+      );
+      for (fx = 0; fx < fullW; fx++) {
+        var fi = fy * fullW + fx;
+        if (!opaqueMask[fi]) continue;
+        var ax = Math.min(
+          analysisW - 1,
+          Math.floor((fx * analysisW) / fullW),
+        );
+        full[fi] = analysisLabels[ay * analysisW + ax];
+      }
+    }
+    return full;
+  }
+
+  function buildOpaqueMaskFromImageData(imageData, alphaThreshold) {
+    var n = imageData.width * imageData.height;
+    var mask = new Uint8Array(n);
+    var data = imageData.data;
+    for (var i = 0; i < n; i++) {
+      mask[i] = data[(i << 2) + 3] >= alphaThreshold ? 1 : 0;
+    }
+    return mask;
+  }
+
+  function hslToRgb(h, s, l) {
+    var c = (1 - Math.abs(2 * l - 1)) * s;
+    var hp = h / 60;
+    var x = c * (1 - Math.abs((hp % 2) - 1));
+    var r1 = 0;
+    var g1 = 0;
+    var b1 = 0;
+    if (hp >= 0 && hp < 1) {
+      r1 = c;
+      g1 = x;
+    } else if (hp < 2) {
+      r1 = x;
+      g1 = c;
+    } else if (hp < 3) {
+      g1 = c;
+      b1 = x;
+    } else if (hp < 4) {
+      g1 = x;
+      b1 = c;
+    } else if (hp < 5) {
+      r1 = x;
+      b1 = c;
+    } else {
+      r1 = c;
+      b1 = x;
+    }
+    var m = l - c / 2;
+    return [
+      Math.round((r1 + m) * 255),
+      Math.round((g1 + m) * 255),
+      Math.round((b1 + m) * 255),
+    ];
+  }
+
+  var DEFAULT_PALETTE = [
+    [76, 139, 245],
+    [90, 158, 111],
+    [208, 181, 106],
+    [196, 92, 92],
+    [168, 120, 200],
+    [80, 180, 180],
+    [220, 140, 80],
+    [140, 160, 220],
+  ];
+
+  function createDefaultPalette(labelIds) {
+    var colors = new Map();
+    var ids = labelIds.slice().sort(function (a, b) {
+      return a - b;
+    });
+    for (var i = 0; i < ids.length; i++) {
+      colors.set(ids[i], DEFAULT_PALETTE[i % DEFAULT_PALETTE.length].slice());
+    }
+    return colors;
+  }
+
+  function createRandomPalette(labelIds) {
+    var colors = new Map();
+    var ids = labelIds.slice().sort(function (a, b) {
+      return a - b;
+    });
+    var count = Math.max(1, ids.length);
+    var hueOffset = Math.random() * 360;
+    for (var i = 0; i < ids.length; i++) {
+      var hue = (hueOffset + (i * 360) / count) % 360;
+      var sat = 0.55 + (i % 3) * 0.1;
+      var light = 0.48 + ((i % 2) * 0.08);
+      colors.set(ids[i], hslToRgb(hue, sat, light));
+    }
+    return colors;
+  }
+
+  function collectLabelIds(labels) {
+    var seen = new Set();
+    for (var i = 0; i < labels.length; i++) {
+      if (labels[i]) seen.add(labels[i]);
+    }
+    return Array.from(seen);
+  }
+
   return {
     labelComponents: labelComponents,
     extractComponent: extractComponent,
     extractComponentCrop: extractComponentCrop,
     validateSettings: validateSettings,
+    buildComponentsFromLabels: buildComponentsFromLabels,
+    floodIsland: floodIsland,
+    relabelIsland: relabelIsland,
+    nextLabelId: nextLabelId,
+    propagateLabelsToFullRes: propagateLabelsToFullRes,
+    buildOpaqueMaskFromImageData: buildOpaqueMaskFromImageData,
+    createDefaultPalette: createDefaultPalette,
+    createRandomPalette: createRandomPalette,
+    collectLabelIds: collectLabelIds,
   };
 }));

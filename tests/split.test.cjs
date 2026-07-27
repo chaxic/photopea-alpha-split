@@ -137,4 +137,78 @@ test("installer page loads zip-util and export wording", () => {
   assert.match(app, /Export elements/);
   assert.doesNotMatch(app, /Split into layers/);
   assert.doesNotMatch(app, /makePlaceLayerScript/);
+  assert.match(app, /Randomize colors/);
+  assert.match(app, /labelsEdited/);
+  assert.match(app, /propagateLabelsToFullRes/);
+});
+
+test("floodIsland respects 4 vs 8 connectivity", () => {
+  const labels = new Int32Array(5 * 5);
+  labels[1 * 5 + 1] = 1;
+  labels[2 * 5 + 2] = 1;
+  const four = core.floodIsland(labels, 5, 5, 1, 1, false);
+  assert.equal(four.size, 1);
+  const eight = core.floodIsland(labels, 5, 5, 1, 1, true);
+  assert.equal(eight.size, 2);
+});
+
+test("fill join merges two labels into one component", () => {
+  const labels = new Int32Array(10 * 10);
+  for (let y = 1; y <= 3; y++) {
+    for (let x = 1; x <= 3; x++) labels[y * 10 + x] = 1;
+  }
+  for (let y = 5; y <= 7; y++) {
+    for (let x = 5; x <= 7; x++) labels[y * 10 + x] = 2;
+  }
+  const island = core.floodIsland(labels, 10, 10, 5, 5, true);
+  core.relabelIsland(labels, island.mask, 1);
+  const components = core.buildComponentsFromLabels(labels, 10, 10, 1);
+  assert.equal(components.length, 1);
+  assert.equal(components[0].id, 1);
+  assert.equal(components[0].size, 18);
+});
+
+test("fill separate splits an 8-connected pair", () => {
+  const labels = new Int32Array(10 * 10);
+  labels[1 * 10 + 1] = 1;
+  labels[1 * 10 + 2] = 1;
+  labels[2 * 10 + 2] = 1;
+  labels[3 * 10 + 3] = 1;
+  labels[3 * 10 + 4] = 1;
+  // With 4-connected flood, the diagonal-only touch at (2,2)-(3,3) separates.
+  const island = core.floodIsland(labels, 10, 10, 3, 3, false);
+  const newId = core.nextLabelId(labels);
+  core.relabelIsland(labels, island.mask, newId);
+  const components = core.buildComponentsFromLabels(labels, 10, 10, 1);
+  assert.equal(components.length, 2);
+});
+
+test("buildComponentsFromLabels respects minSize", () => {
+  const labels = new Int32Array(8 * 8);
+  for (let i = 0; i < 10; i++) labels[i] = 1;
+  labels[20] = 2;
+  const components = core.buildComponentsFromLabels(labels, 8, 8, 5);
+  assert.equal(components.length, 1);
+  assert.equal(components[0].id, 1);
+});
+
+test("propagateLabelsToFullRes maps 2x2 analysis onto 4x4", () => {
+  const analysis = new Int32Array([1, 2, 3, 4]);
+  const opaque = new Uint8Array(16).fill(1);
+  const full = core.propagateLabelsToFullRes(analysis, 2, 2, 4, 4, opaque);
+  assert.equal(full[0], 1);
+  assert.equal(full[1], 1);
+  assert.equal(full[2], 2);
+  assert.equal(full[3], 2);
+  assert.equal(full[4], 1);
+  assert.equal(full[8], 3);
+  assert.equal(full[10], 4);
+  assert.equal(full[15], 4);
+});
+
+test("createRandomPalette returns a colour for each label id", () => {
+  const palette = core.createRandomPalette([1, 3, 5]);
+  assert.equal(palette.size, 3);
+  assert.ok(Array.isArray(palette.get(1)));
+  assert.equal(palette.get(1).length, 3);
 });

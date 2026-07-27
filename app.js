@@ -33,10 +33,13 @@ const state = {
   folderPermission: "none",
   exportAfterFolderChoice: false,
   pickerWindow: null,
+  editTool: "sample",
+  sampledLabel: null,
   stage: "idle",
   statusKind: "idle",
   statusText: "",
   scan: null,
+  previewObserver: null,
   activeRequestId: null,
   activeOperation: null,
   requestTimer: null,
@@ -158,10 +161,64 @@ function destinationHtml(disabled) {
     ${folderBody}`;
 }
 
+function sampleIndicatorHtml() {
+  if (state.sampledLabel === "new") {
+    return `<span class="sample-swatch sample-swatch-new" aria-hidden="true"></span><span>Sample: New label</span>`;
+  }
+  if (typeof state.sampledLabel === "number" && state.sampledLabel > 0) {
+    const color =
+      (state.scan &&
+        state.scan.labelColors &&
+        state.scan.labelColors.get(state.sampledLabel)) ||
+      [120, 120, 120];
+    return `<span class="sample-swatch" style="background:rgb(${color[0]},${color[1]},${color[2]})" aria-hidden="true"></span><span>Sample: ${escapeHtml(state.prefix)}_${padNumber(state.sampledLabel, 2)}</span>`;
+  }
+  return `<span class="sample-swatch sample-swatch-empty" aria-hidden="true"></span><span>Sample: None</span>`;
+}
+
+function previewToolbarHtml(disabled) {
+  if (!state.scan) return "";
+  const sampleActive = state.editTool === "sample" ? " tool-active" : "";
+  const fillActive = state.editTool === "fill" ? " tool-active" : "";
+  const updateDisabled =
+    disabled || !(state.scan.labelsEdited && !state.scan.labelsCommitted)
+      ? " disabled"
+      : "";
+  const dirty =
+    state.scan.labelsEdited && !state.scan.labelsCommitted
+      ? '<span class="preview-dirty">unsaved edits</span>'
+      : "";
+
+  return `
+    <div class="preview-toolbar" role="toolbar" aria-label="Preview edit tools">
+      <button type="button" class="tool-button" data-preview-action="randomize"${disabled}>Randomize colors</button>
+      <button type="button" class="tool-button${sampleActive}" data-preview-action="sample"${disabled}>Sample</button>
+      <button type="button" class="tool-button${fillActive}" data-preview-action="fill"${disabled}>Fill</button>
+      <button type="button" class="tool-button" data-preview-action="update"${updateDisabled}>Update</button>
+    </div>
+    <div class="sample-row">
+      <div class="sample-indicator">${sampleIndicatorHtml()}</div>
+      <button type="button" class="small-button" data-preview-action="sample-new"${disabled}>New</button>
+      ${dirty}
+    </div>`;
+}
+
 function panelHtml() {
   const busy = state.statusKind === "working";
   const disabled = busy ? " disabled" : "";
-  const canExport = !busy && state.scan && state.scan.components.length > 0;
+  const settingsMatch =
+    !state.scan ||
+    (!state.scan.settingsInvalidated &&
+      state.scan.settings &&
+      state.scan.settings.alphaThreshold === Number(state.alphaThreshold) &&
+      state.scan.settings.minSize === Number(state.minSize) &&
+      !!state.scan.settings.eightConnected === !!state.eightConnected);
+  const canExport =
+    !busy &&
+    state.scan &&
+    state.scan.components.length > 0 &&
+    settingsMatch &&
+    !(state.scan.labelsEdited && !state.scan.labelsCommitted);
   const exportDisabled = canExport ? "" : " disabled";
   const count = state.scan ? state.scan.components.length : 0;
 
@@ -207,21 +264,22 @@ function panelHtml() {
         <div class="preview-wrap${state.scan ? " show" : ""}" id="preview-wrap">
           <div class="preview-title-row">
             <span>Preview</span>
-            <strong>${
+            <strong id="preview-count">${
               state.scan
                 ? `${count} element${count === 1 ? "" : "s"}`
                 : "Not scanned yet"
             }</strong>
           </div>
+          ${previewToolbarHtml(disabled)}
           <div class="preview-card${state.scan ? " show" : ""}" id="preview-card">
             <canvas id="preview-canvas" aria-label="Detected elements preview"></canvas>
           </div>
           <p class="preview-meta" id="preview-meta">
             ${
               state.scan
-                ? `Colored regions show what will be exported · ${state.scan.width}×${state.scan.height}${
+                ? `Click to Sample/Fill · ${state.scan.width}×${state.scan.height}${
                     state.scan.analysisScale < 0.999
-                      ? ` · preview @ ${state.scan.analysisWidth}×${state.scan.analysisHeight}`
+                      ? ` · edit @ ${state.scan.analysisWidth}×${state.scan.analysisHeight}`
                       : ""
                   }`
                 : "Preview detects separate opaque regions without changing your document."
@@ -244,7 +302,7 @@ function panelHtml() {
       <footer class="panel-footer">
         <div class="panel-footer-copy">
           <span>Tested with Photopea ${escapeHtml(META.testedPhotopea)} · scripting v${escapeHtml(META.scriptingVersion)}</span>
-          <span>Preview is read-only · Export writes PNG files</span>
+          <span>Preview edits are local until Update · Export writes PNG files</span>
         </div>
         <a href="${META.repositoryUrl}" target="_blank" rel="noreferrer" title="View the Alpha Split source code on GitHub">
           View source <span aria-hidden="true">↗</span>
@@ -308,7 +366,10 @@ function render() {
   root.className = state.embedded ? "embedded-shell" : "install-page";
   root.innerHTML = state.embedded ? panelHtml() : installerHtml();
   bindEvents();
-  if (state.scan) drawPreview(state.scan);
+  if (state.scan) {
+    drawPreview(state.scan);
+    observePreviewResize();
+  }
 }
 
 function readInputs() {
@@ -316,11 +377,26 @@ function readInputs() {
     const value = Number(document.querySelector(selector)?.value);
     return Number.isFinite(value) ? value : fallback;
   };
+  const previous = {
+    alphaThreshold: state.alphaThreshold,
+    minSize: state.minSize,
+    eightConnected: state.eightConnected,
+  };
   state.alphaThreshold = readNumber("#alpha", state.alphaThreshold);
   state.minSize = readNumber("#min-size", state.minSize);
   state.prefix = document.querySelector("#prefix")?.value ?? state.prefix;
   state.eightConnected =
     document.querySelector("#eight")?.checked ?? state.eightConnected;
+
+  if (
+    state.scan &&
+    (previous.alphaThreshold !== state.alphaThreshold ||
+      previous.minSize !== state.minSize ||
+      previous.eightConnected !== state.eightConnected)
+  ) {
+    // Settings changed — export blocked until a fresh Preview.
+    state.scan.settingsInvalidated = true;
+  }
 }
 
 function clearActiveRequest() {
@@ -794,31 +870,31 @@ function decodePng(buffer, maxSide) {
 
 function drawPreview(scan) {
   const canvas = document.querySelector("#preview-canvas");
+  const card = document.querySelector("#preview-card");
   if (!canvas || !scan || !scan.imageData) return;
-  const width = scan.imageData.width;
-  const height = scan.imageData.height;
+
+  const width = scan.analysisWidth || scan.imageData.width;
+  const height = scan.analysisHeight || scan.imageData.height;
   const labels = scan.labels;
   const imageData = scan.imageData;
-  const maxSide = 512;
-  const scale = Math.min(1, maxSide / Math.max(width, height));
+  const containerWidth = Math.max(
+    1,
+    Math.floor((card && card.clientWidth) || canvas.clientWidth || 320),
+  );
+  const scale = Math.min(1, containerWidth / Math.max(width, 1));
   const dw = Math.max(1, Math.round(width * scale));
   const dh = Math.max(1, Math.round(height * scale));
-  canvas.width = dw;
-  canvas.height = dh;
+  if (canvas.width !== dw || canvas.height !== dh) {
+    canvas.width = dw;
+    canvas.height = dh;
+  }
   const ctx = canvas.getContext("2d");
   const out = ctx.createImageData(dw, dh);
   const src = imageData.data;
   const dst = out.data;
-  const palette = [
-    [76, 139, 245],
-    [90, 158, 111],
-    [208, 181, 106],
-    [196, 92, 92],
-    [168, 120, 200],
-    [80, 180, 180],
-    [220, 140, 80],
-    [140, 160, 220],
-  ];
+  const colors = scan.labelColors;
+  const highlightId =
+    typeof state.sampledLabel === "number" ? state.sampledLabel : -1;
 
   for (let py = 0; py < dh; py++) {
     const srcY = Math.min(height - 1, Math.floor(py / scale));
@@ -835,15 +911,180 @@ function drawPreview(scan) {
         dst[dstOffset + 3] = Math.min(src[srcOffset + 3], 60);
         continue;
       }
-      const color = palette[(id - 1) % palette.length];
-      dst[dstOffset] = (src[srcOffset] + color[0]) >> 1;
-      dst[dstOffset + 1] = (src[srcOffset + 1] + color[1]) >> 1;
-      dst[dstOffset + 2] = (src[srcOffset + 2] + color[2]) >> 1;
+      const color =
+        (colors && colors.get(id)) || [76, 139, 245];
+      let r = (src[srcOffset] + color[0]) >> 1;
+      let g = (src[srcOffset + 1] + color[1]) >> 1;
+      let b = (src[srcOffset + 2] + color[2]) >> 1;
+      if (id === highlightId) {
+        r = Math.min(255, r + 40);
+        g = Math.min(255, g + 40);
+        b = Math.min(255, b + 40);
+      }
+      dst[dstOffset] = r;
+      dst[dstOffset + 1] = g;
+      dst[dstOffset + 2] = b;
       dst[dstOffset + 3] = Math.max(src[srcOffset + 3], 180);
     }
   }
 
   ctx.putImageData(out, 0, 0);
+}
+
+function updatePreviewChrome() {
+  const countEl = document.querySelector("#preview-count");
+  if (countEl && state.scan) {
+    const count = state.scan.components.length;
+    countEl.textContent = `${count} element${count === 1 ? "" : "s"}`;
+  }
+  const indicator = document.querySelector(".sample-indicator");
+  if (indicator) indicator.innerHTML = sampleIndicatorHtml();
+  const dirty = document.querySelector(".preview-dirty");
+  const sampleRow = document.querySelector(".sample-row");
+  if (sampleRow) {
+    const shouldShow =
+      state.scan && state.scan.labelsEdited && !state.scan.labelsCommitted;
+    if (shouldShow && !dirty) {
+      const badge = document.createElement("span");
+      badge.className = "preview-dirty";
+      badge.textContent = "unsaved edits";
+      sampleRow.appendChild(badge);
+    } else if (!shouldShow && dirty) {
+      dirty.remove();
+    }
+  }
+  const updateBtn = document.querySelector('[data-preview-action="update"]');
+  if (updateBtn) {
+    updateBtn.disabled = !(
+      state.scan &&
+      state.scan.labelsEdited &&
+      !state.scan.labelsCommitted
+    );
+  }
+  document.querySelectorAll("[data-preview-action]").forEach((button) => {
+    if (button.dataset.previewAction === "sample") {
+      button.classList.toggle("tool-active", state.editTool === "sample");
+    }
+    if (button.dataset.previewAction === "fill") {
+      button.classList.toggle("tool-active", state.editTool === "fill");
+    }
+  });
+}
+
+function canvasToAnalysisCoords(event, canvas, scan) {
+  const rect = canvas.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0) return null;
+  const ax = Math.floor(
+    ((event.clientX - rect.left) / rect.width) * scan.analysisWidth,
+  );
+  const ay = Math.floor(
+    ((event.clientY - rect.top) / rect.height) * scan.analysisHeight,
+  );
+  if (
+    ax < 0 ||
+    ay < 0 ||
+    ax >= scan.analysisWidth ||
+    ay >= scan.analysisHeight
+  ) {
+    return null;
+  }
+  return { x: ax, y: ay };
+}
+
+function handlePreviewClick(event) {
+  const scan = state.scan;
+  const canvas = document.querySelector("#preview-canvas");
+  if (!scan || !canvas || state.statusKind === "working") return;
+  const coords = canvasToAnalysisCoords(event, canvas, scan);
+  if (!coords) return;
+  const index = coords.y * scan.analysisWidth + coords.x;
+  const label = scan.labels[index];
+  if (!label) return;
+
+  if (state.editTool === "sample") {
+    state.sampledLabel = label;
+    updatePreviewChrome();
+    drawPreview(scan);
+    return;
+  }
+
+  if (state.editTool === "fill") {
+    const island = CORE.floodIsland(
+      scan.labels,
+      scan.analysisWidth,
+      scan.analysisHeight,
+      coords.x,
+      coords.y,
+      state.eightConnected,
+    );
+    if (!island.size) return;
+    const target =
+      state.sampledLabel === "new" || state.sampledLabel === null
+        ? CORE.nextLabelId(scan.labels)
+        : state.sampledLabel;
+    if (target === island.label) return;
+    CORE.relabelIsland(scan.labels, island.mask, target);
+    if (!scan.labelColors.has(target)) {
+      const fresh = CORE.createRandomPalette([target]);
+      scan.labelColors.set(target, fresh.get(target));
+    }
+    scan.labelsEdited = true;
+    scan.labelsCommitted = false;
+    scan.exportLabels = null;
+    scan.exportImageData = null;
+    updatePreviewChrome();
+    drawPreview(scan);
+  }
+}
+
+function randomizePreviewColors() {
+  if (!state.scan) return;
+  const ids = CORE.collectLabelIds(state.scan.labels);
+  state.scan.labelColors = CORE.createRandomPalette(ids);
+  drawPreview(state.scan);
+  updatePreviewChrome();
+}
+
+function commitPreviewEdits() {
+  if (!state.scan || !state.scan.labelsEdited) return;
+  const settings = settingsFromState();
+  const components = CORE.buildComponentsFromLabels(
+    state.scan.labels,
+    state.scan.analysisWidth,
+    state.scan.analysisHeight,
+    settings.minSize,
+  );
+  state.scan.components = components;
+  state.scan.labelsCommitted = true;
+  state.scan.exportLabels = null;
+  state.scan.exportImageData = null;
+  state.statusKind = components.length ? "ok" : "error";
+  state.statusText = components.length
+    ? `Updated: ${components.length} element${components.length === 1 ? "" : "s"} ready to export.`
+    : "No elements left after Update. Adjust fills or run Preview again.";
+  updatePreviewChrome();
+  const statusSpan = document.querySelector(".status span");
+  if (statusSpan) statusSpan.textContent = state.statusText;
+  const statusBox = document.querySelector(".status");
+  if (statusBox) {
+    statusBox.className = `status status-${state.statusKind}`;
+  }
+  // Re-enable Export without full render when possible.
+  const exportBtn = document.querySelector('[data-run="export"]');
+  if (exportBtn) exportBtn.disabled = !components.length;
+}
+
+function observePreviewResize() {
+  if (state.previewObserver) {
+    state.previewObserver.disconnect();
+    state.previewObserver = null;
+  }
+  const card = document.querySelector("#preview-card");
+  if (!card || typeof ResizeObserver !== "function") return;
+  state.previewObserver = new ResizeObserver(() => {
+    if (state.scan) drawPreview(state.scan);
+  });
+  state.previewObserver.observe(card);
 }
 
 function yieldToUi() {
@@ -884,10 +1125,19 @@ async function finishScanAnalysis(requestId, pngBuffer, meta) {
       settings.eightConnected,
     );
 
+    const labelIds = labeled.components.map((component) => component.id);
+
+    state.sampledLabel = null;
+    state.editTool = "sample";
     state.scan = {
       imageData: decoded.imageData,
       labels: labeled.labels,
       components: labeled.components,
+      labelColors: CORE.createDefaultPalette(labelIds),
+      labelsEdited: false,
+      labelsCommitted: true,
+      exportLabels: null,
+      exportImageData: null,
       width: decoded.fullWidth,
       height: decoded.fullHeight,
       analysisWidth: labeled.width,
@@ -916,17 +1166,94 @@ async function finishScanAnalysis(requestId, pngBuffer, meta) {
 }
 
 async function ensureFullResolutionScan(requestId, settings) {
-  if (state.scan.fullResReady && state.scan.imageData) {
-    return state.scan;
+  const scan = state.scan;
+  if (!scan) throw new Error("Preview data is missing. Run Preview again.");
+
+  if (scan.labelsEdited) {
+    if (scan.exportLabels && scan.exportImageData && scan.labelsCommitted) {
+      return {
+        ...scan,
+        imageData: scan.exportImageData,
+        labels: scan.exportLabels,
+        components: scan.components,
+      };
+    }
+    if (!scan.pngBuffer) {
+      throw new Error("Preview data is missing. Run Preview again.");
+    }
+
+    const timeoutMs = operationTimeoutMs(
+      "export",
+      scan.meta,
+      scan.components.length,
+    );
+    setWorking(
+      "preparing",
+      "Propagating edited masks to full resolution…",
+      requestId,
+      "export",
+      timeoutMs,
+    );
+    render();
+
+    const decoded = await decodePng(scan.pngBuffer, 0);
+    if (state.activeRequestId !== requestId) return null;
+    await yieldToUi();
+
+    const opaque = CORE.buildOpaqueMaskFromImageData(
+      decoded.imageData,
+      settings.alphaThreshold,
+    );
+    const fullLabels = CORE.propagateLabelsToFullRes(
+      scan.labels,
+      scan.analysisWidth,
+      scan.analysisHeight,
+      decoded.fullWidth,
+      decoded.fullHeight,
+      opaque,
+    );
+    const components = CORE.buildComponentsFromLabels(
+      fullLabels,
+      decoded.fullWidth,
+      decoded.fullHeight,
+      settings.minSize,
+    );
+
+    scan.exportImageData = decoded.imageData;
+    scan.exportLabels = fullLabels;
+    scan.components = components;
+    scan.width = decoded.fullWidth;
+    scan.height = decoded.fullHeight;
+
+    return {
+      ...scan,
+      imageData: decoded.imageData,
+      labels: fullLabels,
+      components,
+    };
   }
-  if (!state.scan.pngBuffer) {
+
+  if (scan.exportLabels && scan.exportImageData) {
+    return {
+      ...scan,
+      imageData: scan.exportImageData,
+      labels: scan.exportLabels,
+      components: scan.components,
+    };
+  }
+
+  // Analysis was already full resolution (no downscale).
+  if (scan.fullResReady && scan.analysisScale >= 0.999) {
+    return scan;
+  }
+  if (!scan.pngBuffer) {
     throw new Error("Preview data is missing. Run Preview again.");
   }
 
   const timeoutMs = operationTimeoutMs(
     "export",
-    state.scan.meta,
-    state.scan.components.length,
+    scan.meta,
+    scan.components.length,
   );
   setWorking(
     "preparing",
@@ -937,7 +1264,7 @@ async function ensureFullResolutionScan(requestId, settings) {
   );
   render();
 
-  const decoded = await decodePng(state.scan.pngBuffer, 0);
+  const decoded = await decodePng(scan.pngBuffer, 0);
   if (state.activeRequestId !== requestId) return null;
 
   setWorking(
@@ -957,21 +1284,21 @@ async function ensureFullResolutionScan(requestId, settings) {
     settings.eightConnected,
   );
 
-  state.scan = {
-    ...state.scan,
+  // Preserve analysis labels for continued editing; export uses full-res copies.
+  scan.exportImageData = decoded.imageData;
+  scan.exportLabels = labeled.labels;
+  scan.components = labeled.components;
+  scan.width = decoded.fullWidth;
+  scan.height = decoded.fullHeight;
+  scan.fullResReady = true;
+  scan.settings = settings;
+
+  return {
+    ...scan,
     imageData: decoded.imageData,
     labels: labeled.labels,
     components: labeled.components,
-    width: decoded.fullWidth,
-    height: decoded.fullHeight,
-    analysisWidth: labeled.width,
-    analysisHeight: labeled.height,
-    analysisScale: 1,
-    fullResReady: true,
-    settings,
   };
-
-  return state.scan;
 }
 
 function beginScan() {
@@ -1027,6 +1354,13 @@ async function beginExport() {
     render();
     return;
   }
+  if (state.scan.labelsEdited && !state.scan.labelsCommitted) {
+    state.statusKind = "error";
+    state.statusText =
+      "Click Update to apply preview edits before exporting.";
+    render();
+    return;
+  }
 
   readInputs();
   const settings = settingsFromState();
@@ -1034,6 +1368,19 @@ async function beginExport() {
   if (!validation.ok) {
     state.statusKind = "error";
     state.statusText = validation.message;
+    render();
+    return;
+  }
+
+  if (
+    state.scan.settings &&
+    (state.scan.settings.alphaThreshold !== settings.alphaThreshold ||
+      state.scan.settings.minSize !== settings.minSize ||
+      !!state.scan.settings.eightConnected !== !!settings.eightConnected)
+  ) {
+    state.statusKind = "error";
+    state.statusText =
+      "Detection settings changed. Run Preview again before exporting.";
     render();
     return;
   }
@@ -1059,13 +1406,18 @@ async function beginExport() {
     const scan = await ensureFullResolutionScan(requestId, settings);
     if (!scan || state.activeRequestId !== requestId) return;
 
+    if (!scan.components.length) {
+      failActiveRequest("No elements to export after Update.");
+      return;
+    }
+
     const zipEntries = [];
     const written = [];
 
     for (let index = 0; index < scan.components.length; index++) {
       if (state.activeRequestId !== requestId) return;
       const component = scan.components[index];
-      const baseName = `${settings.prefix}_${padNumber(component.id, 2)}`;
+      const baseName = `${settings.prefix}_${padNumber(index + 1, 2)}`;
       const filename = `${baseName}.png`;
       setWorking(
         "exporting",
@@ -1330,6 +1682,40 @@ function bindEvents() {
     .querySelector("#download-plugin")
     ?.addEventListener("click", downloadInstaller);
 
+  document.querySelectorAll("[data-preview-action]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const action = button.dataset.previewAction;
+      if (action === "randomize") {
+        randomizePreviewColors();
+        return;
+      }
+      if (action === "sample") {
+        state.editTool = "sample";
+        updatePreviewChrome();
+        return;
+      }
+      if (action === "fill") {
+        state.editTool = "fill";
+        updatePreviewChrome();
+        return;
+      }
+      if (action === "sample-new") {
+        state.sampledLabel = "new";
+        state.editTool = "fill";
+        updatePreviewChrome();
+        drawPreview(state.scan);
+        return;
+      }
+      if (action === "update") {
+        commitPreviewEdits();
+      }
+    });
+  });
+
+  document
+    .querySelector("#preview-canvas")
+    ?.addEventListener("click", handlePreviewClick);
+
   document.querySelectorAll(".panel-body input").forEach((input) => {
     input.addEventListener("input", () => {
       readInputs();
@@ -1341,6 +1727,7 @@ function bindEvents() {
     });
     input.addEventListener("change", () => {
       readInputs();
+      render();
     });
   });
 }
