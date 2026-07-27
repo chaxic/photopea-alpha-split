@@ -6,6 +6,7 @@ const STORE_NAME = "handles";
 const DIRECTORY_KEY = "export-directory";
 const READY_MESSAGE = "ALPHA_SPLIT_DIRECTORY_READY";
 const CANCEL_MESSAGE = "ALPHA_SPLIT_DIRECTORY_CANCELLED";
+const JSON_READY_MESSAGE = "ALPHA_SPLIT_JSON_READY";
 
 function openDatabase() {
   return new Promise((resolve, reject) => {
@@ -71,6 +72,7 @@ function setPickerCopy(title, copy, buttonLabel) {
 }
 
 let rememberedHandle = null;
+let pickerMode = "folder";
 
 async function finishWithHandle(handle) {
   await storeDirectoryHandle(handle);
@@ -142,8 +144,72 @@ async function chooseFolder() {
   }
 }
 
+async function chooseJsonFile() {
+  const button = document.querySelector("#choose-folder");
+  button.disabled = true;
+  setStatus("Waiting for a JSON file…");
+
+  try {
+    if (!("showOpenFilePicker" in window)) {
+      setStatus(
+        "This browser does not support the file picker. Grant folder access in the plugin and try Load data file again.",
+        "error",
+      );
+      notifyOpener(CANCEL_MESSAGE, { reason: "unsupported" });
+      button.disabled = false;
+      return;
+    }
+
+    const [handle] = await window.showOpenFilePicker({
+      id: "photopea-alpha-split-json",
+      multiple: false,
+      types: [
+        {
+          description: "Alpha Split data",
+          accept: {
+            "application/json": [".json"],
+          },
+        },
+      ],
+    });
+    const file = await handle.getFile();
+    const text = await file.text();
+    setStatus(`Loaded “${file.name}”. Returning to Photopea…`, "ok");
+    notifyOpener(JSON_READY_MESSAGE, {
+      name: file.name,
+      text,
+    });
+    setTimeout(() => window.close(), 650);
+  } catch (error) {
+    if (error && error.name === "AbortError") {
+      setStatus("No file was selected.", "error");
+      notifyOpener(CANCEL_MESSAGE, { reason: "json-cancelled" });
+    } else {
+      setStatus(
+        (error && error.message) || "The JSON file could not be opened.",
+        "error",
+      );
+      notifyOpener(CANCEL_MESSAGE, { reason: "error" });
+    }
+    button.disabled = false;
+  }
+}
+
 async function initializePicker() {
   const mode = new URLSearchParams(window.location.search).get("mode");
+  pickerMode = mode === "json" ? "json" : "folder";
+
+  if (pickerMode === "json") {
+    setPickerCopy(
+      "Load Alpha Split data",
+      "Choose an alpha-split-data.json file (or any valid Alpha Split export JSON). Element boxes and settings will load into the panel.",
+      "Choose JSON file",
+    );
+    setStatus("Your file stays on this device.");
+    document.title = "Load Alpha Split data";
+    return;
+  }
+
   if (mode === "choose" || mode === "change") return;
 
   try {
@@ -164,6 +230,9 @@ async function initializePicker() {
 
 document
   .querySelector("#choose-folder")
-  ?.addEventListener("click", chooseFolder);
+  ?.addEventListener("click", () => {
+    if (pickerMode === "json") chooseJsonFile();
+    else chooseFolder();
+  });
 
 initializePicker();

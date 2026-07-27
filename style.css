@@ -152,6 +152,27 @@ button:disabled, input:disabled { cursor: wait; opacity: .62; }
   letter-spacing: .08em;
   text-transform: uppercase;
 }
+.data-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin: 0 0 12px;
+}
+.small-action {
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid #4b4b4b;
+  border-radius: 5px;
+  background: var(--panel-raised);
+  color: #cfcfcf;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+}
+.small-action:hover:not(:disabled) {
+  border-color: #5a5a5a;
+  color: #fff;
+}
 .destination-toggle {
   display: grid;
   grid-template-columns: 1fr 1fr;

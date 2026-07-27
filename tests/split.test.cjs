@@ -170,8 +170,37 @@ test("assemble uses import-all then batch position", () => {
   assert.doesNotMatch(app, /makeAssemblePlaceScript/);
   assert.doesNotMatch(app, /makeAssembleFinishScript/);
   assert.match(app, /awaitingOpenDone/);
+  assert.match(app, /awaitingBatchDone/);
+  assert.match(app, /knownLayerIds/);
+  assert.match(app, /findNewImageLayer|name === "image"/);
   assert.match(app, /matchComponentsToElements|CORE\.matchComponentsToElements/);
   assert.match(app, /Restored \$\{components\.length\}|Restored \$\{.*\} element/);
+  // Last capture "done" must not complete Assemble — only assemble-batch.
+  assert.match(
+    app,
+    /Never complete Assemble from Photopea "done"|only assemble-batch may finish/,
+  );
+});
+
+test("Generate and Restore ID Mask replace Preview", () => {
+  const app = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
+  assert.match(app, /Generate ID Mask/);
+  assert.match(app, /Restore ID Mask/);
+  assert.match(app, /generate-mask/);
+  assert.match(app, /restore-mask/);
+  assert.match(app, /buildSchematicScan/);
+  assert.match(app, /applyLoadedSplitData/);
+  assert.match(app, /loadDataLayerFromSelection/);
+  assert.match(app, /loadDataFileFromFolderOrPicker/);
+  assert.match(app, /scanMode === "restore"/);
+  assert.doesNotMatch(app, /data-run="scan"/);
+});
+
+test("JSON data file picker posts ALPHA_SPLIT_JSON_READY", () => {
+  const picker = fs.readFileSync(path.join(__dirname, "..", "picker.js"), "utf8");
+  assert.match(picker, /ALPHA_SPLIT_JSON_READY/);
+  assert.match(picker, /showOpenFilePicker/);
+  assert.match(picker, /mode === "json"/);
 });
 
 test("labelsFromElements paints opaque pixels from full-res bboxes", () => {

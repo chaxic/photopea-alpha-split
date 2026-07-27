@@ -8,6 +8,7 @@ const RESULT_PREFIX = "ALPHA_SPLIT_RESULT::";
 const MESSAGE_PREFIX = "ALPHA_SPLIT::";
 const READY_MESSAGE = "ALPHA_SPLIT_DIRECTORY_READY";
 const CANCEL_MESSAGE = "ALPHA_SPLIT_DIRECTORY_CANCELLED";
+const JSON_READY_MESSAGE = "ALPHA_SPLIT_JSON_READY";
 const DB_NAME = "photopea-alpha-split";
 const DB_VERSION = 1;
 const STORE_NAME = "handles";
@@ -185,7 +186,7 @@ function sampleIndicatorHtml() {
 }
 
 function previewToolbarHtml(disabled) {
-  if (!state.scan) return "";
+  if (!state.scan || state.scan.schematic) return "";
   const sampleActive = state.editTool === "sample" ? " tool-active" : "";
   const fillActive = state.editTool === "fill" ? " tool-active" : "";
   const updateDisabled =
@@ -198,7 +199,7 @@ function previewToolbarHtml(disabled) {
       : "";
 
   return `
-    <div class="preview-toolbar" role="toolbar" aria-label="Preview edit tools">
+    <div class="preview-toolbar" role="toolbar" aria-label="ID Mask edit tools">
       <button type="button" class="tool-button" data-preview-action="randomize"${disabled}>Randomize colors</button>
       <button type="button" class="tool-button${sampleActive}" data-preview-action="sample"${disabled}>Sample</button>
       <button type="button" class="tool-button${fillActive}" data-preview-action="fill"${disabled}>Fill</button>
@@ -216,6 +217,7 @@ function panelHtml() {
   const disabled = busy ? " disabled" : "";
   const settingsMatch =
     !state.scan ||
+    state.scan.schematic ||
     (!state.scan.settingsInvalidated &&
       state.scan.settings &&
       state.scan.settings.alphaThreshold === Number(state.alphaThreshold) &&
@@ -224,6 +226,7 @@ function panelHtml() {
   const canExport =
     !busy &&
     state.scan &&
+    !state.scan.schematic &&
     state.scan.components.length > 0 &&
     settingsMatch &&
     !(state.scan.labelsEdited && !state.scan.labelsCommitted);
@@ -237,6 +240,10 @@ function panelHtml() {
     state.folderData.elements.length > 0;
   const assembleDisabled = canAssemble ? "" : " disabled";
   const count = state.scan ? state.scan.components.length : 0;
+  const canRestoreMask = hasLoadedSplitData();
+  const idMaskLabel = canRestoreMask ? "Restore ID Mask" : "Generate ID Mask";
+  const idMaskRun = canRestoreMask ? "restore-mask" : "generate-mask";
+  const showPreview = !!(state.scan || canRestoreMask);
 
   return `
     <section class="plugin-panel" aria-label="Alpha Split plugin">
@@ -277,13 +284,21 @@ function panelHtml() {
 
         ${destinationHtml(disabled)}
 
-        <div class="preview-wrap${state.scan ? " show" : ""}" id="preview-wrap">
+        <p class="section-label">Data</p>
+        <div class="data-row">
+          <button class="secondary small-action" type="button" data-run="load-data-layer"${disabled}>Load data layer</button>
+          <button class="secondary small-action" type="button" data-run="load-data-file"${disabled}>Load data file</button>
+        </div>
+
+        <div class="preview-wrap${showPreview ? " show" : ""}" id="preview-wrap">
           <div class="preview-title-row">
-            <span>Preview</span>
+            <span>${state.scan && state.scan.schematic ? "Layout" : "ID Mask"}</span>
             <strong id="preview-count">${
               state.scan
-                ? `${count} element${count === 1 ? "" : "s"}`
-                : "Not scanned yet"
+                ? `${count} element${count === 1 ? "" : "s"}${state.scan.schematic ? " (schematic)" : ""}`
+                : canRestoreMask
+                  ? `${(state.latestSplitData || state.folderData).elements.length} elements loaded`
+                  : "Not scanned yet"
             }</strong>
           </div>
           ${previewToolbarHtml(disabled)}
@@ -294,12 +309,14 @@ function panelHtml() {
           <p class="preview-meta" id="preview-meta">
             ${
               state.scan
-                ? `Click to Sample/Fill · ${state.scan.width}×${state.scan.height}${
-                    state.scan.analysisScale < 0.999
-                      ? ` · edit @ ${state.scan.analysisWidth}×${state.scan.analysisHeight}`
-                      : ""
-                  }`
-                : "Preview detects separate opaque regions without changing your document."
+                ? state.scan.schematic
+                  ? `Schematic from saved boxes · ${state.scan.width}×${state.scan.height}`
+                  : `Click to Sample/Fill · ${state.scan.width}×${state.scan.height}${
+                      state.scan.analysisScale < 0.999
+                        ? ` · edit @ ${state.scan.analysisWidth}×${state.scan.analysisHeight}`
+                        : ""
+                    }`
+                : "Generate a new ID mask, or restore one from loaded Alpha Split data."
             }
           </p>
         </div>
@@ -310,9 +327,16 @@ function panelHtml() {
             <span>${escapeHtml(state.statusText)}</span>
           </div>
           <div class="action-row">
-            <button class="secondary" type="button" data-run="scan"${disabled}>Preview</button>
+            <button class="secondary" type="button" data-run="${idMaskRun}"${disabled}>${idMaskLabel}</button>
             <button class="primary" type="button" data-run="export"${exportDisabled}>Export elements</button>
           </div>
+          ${
+            canRestoreMask
+              ? `<div class="action-row action-row-single">
+            <button class="secondary" type="button" data-run="generate-mask"${disabled}>Generate ID Mask</button>
+          </div>`
+              : ""
+          }
           <div class="action-row action-row-single">
             <button class="secondary" type="button" data-run="assemble"${assembleDisabled}>Assemble Elements</button>
           </div>
@@ -322,7 +346,7 @@ function panelHtml() {
       <footer class="panel-footer">
         <div class="panel-footer-copy">
           <span>Tested with Photopea ${escapeHtml(META.testedPhotopea)} · scripting v${escapeHtml(META.scriptingVersion)}</span>
-          <span>Assemble imports all then positions · data restores on Preview</span>
+          <span>Assemble imports all then positions · Load data for Restore ID Mask</span>
         </div>
         <a href="${META.repositoryUrl}" target="_blank" rel="noreferrer" title="View the Alpha Split source code on GitHub">
           View source <span aria-hidden="true">↗</span>
@@ -415,7 +439,7 @@ function readInputs() {
       previous.minSize !== state.minSize ||
       previous.eightConnected !== state.eightConnected)
   ) {
-    // Settings changed — export blocked until a fresh Preview.
+    // Settings changed — export blocked until a fresh ID Mask.
     state.scan.settingsInvalidated = true;
   }
 }
@@ -842,8 +866,20 @@ function makeAssembleOpenScript({ requestId, dataUrl }) {
 }());`;
 }
 
-function makeAssembleCaptureScript({ requestId, index, total, name }) {
-  const payload = JSON.stringify({ requestId, index, total, name });
+function makeAssembleCaptureScript({
+  requestId,
+  index,
+  total,
+  name,
+  knownLayerIds,
+}) {
+  const payload = JSON.stringify({
+    requestId,
+    index,
+    total,
+    name,
+    knownLayerIds: knownLayerIds || [],
+  });
   return `
 (function () {
   var settings = ${payload};
@@ -852,9 +888,65 @@ function makeAssembleCaptureScript({ requestId, index, total, name }) {
     if (!app.documents || app.documents.length === 0) {
       throw new Error("The source document is no longer open.");
     }
-    var resultLayer = app.activeDocument.activeLayer;
+    var documentRef = app.activeDocument;
+    var known = {};
+    var knownList = settings.knownLayerIds || [];
+    for (var k = 0; k < knownList.length; k++) {
+      known[Number(knownList[k])] = true;
+    }
+
+    function isKnown(layer) {
+      return !!known[layerId(layer)];
+    }
+
+    function findNewImageLayer(container) {
+      // Prefer newly placed Smart Objects still named "image".
+      for (var i = 0; i < container.layers.length; i++) {
+        var item = container.layers[i];
+        if (item.typename === "ArtLayer" && item.name === "image" && !isKnown(item)) {
+          return item;
+        }
+        if (item.typename === "LayerSet") {
+          var nested = findNewImageLayer(item);
+          if (nested) return nested;
+        }
+      }
+      return null;
+    }
+
+    function findNewestUnknownArtLayer(container) {
+      for (var i = 0; i < container.layers.length; i++) {
+        var item = container.layers[i];
+        if (item.typename === "ArtLayer" && !isKnown(item)) return item;
+        if (item.typename === "LayerSet") {
+          var nested = findNewestUnknownArtLayer(item);
+          if (nested) return nested;
+        }
+      }
+      return null;
+    }
+
+    var resultLayer = findNewImageLayer(documentRef);
     if (!resultLayer) {
-      throw new Error("Photopea did not insert layer " + settings.name + ".");
+      var active = documentRef.activeLayer;
+      if (
+        active &&
+        active.typename === "ArtLayer" &&
+        !isKnown(active) &&
+        (active.name === "image" || active.name === settings.name)
+      ) {
+        resultLayer = active;
+      }
+    }
+    if (!resultLayer) resultLayer = findNewestUnknownArtLayer(documentRef);
+
+    if (!resultLayer) {
+      send("assemble-placed", {
+        ok: false,
+        notReady: true,
+        message: "Waiting for placed Smart Object “" + settings.name + "”."
+      });
+      return;
     }
     if (resultLayer.typename === "LayerSet") {
       send("assemble-placed", {
@@ -864,7 +956,9 @@ function makeAssembleCaptureScript({ requestId, index, total, name }) {
       });
       return;
     }
+
     try { resultLayer.name = settings.name; } catch (_) {}
+    try { documentRef.activeLayer = resultLayer; } catch (_) {}
     send("assemble-placed", {
       ok: true,
       index: settings.index,
@@ -919,11 +1013,18 @@ function makeAssembleBatchFinishScript({
     }
 
     var placed = 0;
+    var failed = 0;
     var list = settings.placements || [];
     for (var i = 0; i < list.length; i++) {
       var item = list[i];
       var resultLayer = findLayerById(documentRef, item.layerId);
-      if (!resultLayer || resultLayer.typename === "LayerSet") continue;
+      if (!resultLayer || resultLayer.typename === "LayerSet") {
+        resultLayer = findArtLayerByName(documentRef, item.name);
+      }
+      if (!resultLayer || resultLayer.typename === "LayerSet") {
+        failed += 1;
+        continue;
+      }
       try { resultLayer.name = item.name; } catch (_) {}
       try { resultLayer.move(group, ElementPlacement.INSIDE); }
       catch (_) {
@@ -942,8 +1043,13 @@ function makeAssembleBatchFinishScript({
     send("assemble-batch", {
       ok: true,
       placed: placed,
+      failed: failed,
       total: list.length,
-      done: true
+      done: true,
+      message: failed
+        ? ("Positioned " + placed + " of " + list.length +
+          "; " + failed + " layer(s) could not be found.")
+        : undefined
     });
   } catch (error) {
     send("assemble", {
@@ -1529,7 +1635,7 @@ function commitPreviewEdits() {
   state.statusKind = components.length ? "ok" : "error";
   state.statusText = components.length
     ? `Updated: ${components.length} element${components.length === 1 ? "" : "s"} ready to export.`
-    : "No elements left after Update. Adjust fills or run Preview again.";
+    : "No elements left after Update. Adjust fills or run Generate ID Mask again.";
   updatePreviewChrome();
   const statusSpan = document.querySelector(".status span");
   if (statusSpan) statusSpan.textContent = state.statusText;
@@ -1541,7 +1647,7 @@ function commitPreviewEdits() {
   if (exportBtn) exportBtn.disabled = !components.length;
 
   if (components.length && state.embedded) {
-    // Persist full-document bboxes so a later Preview can restore them.
+    // Persist full-document bboxes so Restore ID Mask can rematch them later.
     const aw = state.scan.analysisWidth || 1;
     const ah = state.scan.analysisHeight || 1;
     const fw = state.scan.width || aw;
@@ -1655,6 +1761,192 @@ function applyRestoredSettings(data, sourceLabel) {
   return true;
 }
 
+function hasLoadedSplitData() {
+  const data = state.latestSplitData || state.folderData;
+  const validation = DATA.validateSplitData(data);
+  return !!(validation.ok && data.elements && data.elements.length);
+}
+
+function buildSchematicScan(data) {
+  const fullWidth = Math.max(
+    1,
+    Number(data.document && data.document.width) || 1024,
+  );
+  const fullHeight = Math.max(
+    1,
+    Number(data.document && data.document.height) || 1024,
+  );
+  const maxSide = META.previewMaxSide || 2048;
+  const scale = Math.min(1, maxSide / Math.max(fullWidth, fullHeight));
+  const aw = Math.max(1, Math.round(fullWidth * scale));
+  const ah = Math.max(1, Math.round(fullHeight * scale));
+  const imageData = new ImageData(aw, ah);
+  const opaque = new Uint8Array(aw * ah);
+  opaque.fill(1);
+  const painted = CORE.labelsFromElements(
+    aw,
+    ah,
+    opaque,
+    data.elements,
+    fullWidth,
+    fullHeight,
+  );
+  const dst = imageData.data;
+  for (let i = 0; i < painted.labels.length; i++) {
+    if (!painted.labels[i]) continue;
+    const o = i << 2;
+    dst[o] = 255;
+    dst[o + 1] = 255;
+    dst[o + 2] = 255;
+    dst[o + 3] = 255;
+  }
+  const components = CORE.buildComponentsFromLabels(painted.labels, aw, ah, 1);
+  const labelIds = components.map((c) => c.id);
+  return {
+    imageData,
+    labels: painted.labels,
+    components,
+    labelColors: CORE.createDefaultPalette(labelIds),
+    labelsEdited: false,
+    labelsCommitted: true,
+    exportLabels: null,
+    exportImageData: null,
+    width: fullWidth,
+    height: fullHeight,
+    analysisWidth: aw,
+    analysisHeight: ah,
+    analysisScale: scale,
+    pngBuffer: null,
+    fullResReady: false,
+    meta: data.source || {},
+    settings: DATA.applySettingsFromData(data),
+    restoredFromData: true,
+    schematic: true,
+  };
+}
+
+function applyLoadedSplitData(data, sourceLabel) {
+  const validation = DATA.validateSplitData(data);
+  if (!validation.ok) {
+    state.statusKind = "error";
+    state.statusText = validation.message;
+    return false;
+  }
+  applyRestoredSettings(data, sourceLabel);
+  state.latestSplitData = data;
+  if (sourceLabel === "folder" || sourceLabel === "file") {
+    state.folderData = data;
+  }
+  state.scan = buildSchematicScan(data);
+  state.sampledLabel = null;
+  state.editTool = "sample";
+  clearPreviewHover();
+  state.statusKind = "ok";
+  state.statusText = `Loaded ${data.elements.length} element${data.elements.length === 1 ? "" : "s"} from ${sourceLabel}. Click Restore ID Mask for editable shapes.`;
+  return true;
+}
+
+function makeReadActiveTextLayerScript(requestId) {
+  const payload = JSON.stringify({ requestId });
+  return `
+(function () {
+  var settings = ${payload};
+  ${commonHelpers()}
+  try {
+    if (!app.documents || app.documents.length === 0) {
+      throw new Error("Open a document first.");
+    }
+    var layer = app.activeDocument.activeLayer;
+    if (!layer) throw new Error("Select a text layer that holds Alpha Split data.");
+    var text = "";
+    try { text = String(layer.textItem.contents || ""); } catch (_) {
+      throw new Error("Select a text layer that holds Alpha Split data.");
+    }
+    send("data-layer", { ok: true, found: true, jsonText: text, fromActive: true });
+  } catch (error) {
+    send("data-layer", {
+      ok: false,
+      message: error && error.message ? error.message : String(error)
+    });
+  }
+}());`;
+}
+
+async function loadDataLayerFromSelection() {
+  if (!state.embedded) {
+    state.statusKind = "error";
+    state.statusText = "Install the plugin to load a data layer inside Photopea.";
+    render();
+    return;
+  }
+  if (state.statusKind === "working") return;
+  const requestId = createRequestId();
+  const payload = await sendDataLayerScript(
+    requestId,
+    makeReadActiveTextLayerScript(requestId),
+    8000,
+  );
+  if (!payload || !payload.ok || !payload.jsonText) {
+    state.statusKind = "error";
+    state.statusText =
+      (payload && payload.message) ||
+      "Select the AlphaSplit Data text layer, then click Load data layer.";
+    render();
+    return;
+  }
+  try {
+    const parsed = JSON.parse(payload.jsonText);
+    applyLoadedSplitData(parsed, "document");
+    render();
+  } catch {
+    state.statusKind = "error";
+    state.statusText =
+      "The selected layer does not contain valid Alpha Split JSON.";
+    render();
+  }
+}
+
+async function loadDataFileFromFolderOrPicker() {
+  if (state.statusKind === "working") return;
+
+  if (state.folderHandle && state.folderPermission === "granted") {
+    const data = await readFolderSplitData();
+    if (data && applyLoadedSplitData(data, "folder")) {
+      render();
+      return;
+    }
+  }
+
+  openJsonFilePicker();
+}
+
+function openJsonFilePicker() {
+  const url = new URL("./picker.html", pluginBaseUrl());
+  url.searchParams.set("mode", "json");
+  url.searchParams.set("v", META.version);
+  const width = 420;
+  const height = 360;
+  const left = Math.max(
+    0,
+    Math.round(window.screenX + (window.outerWidth - width) / 2),
+  );
+  const top = Math.max(
+    0,
+    Math.round(window.screenY + (window.outerHeight - height) / 2),
+  );
+  state.pickerWindow = window.open(
+    url.href,
+    "alpha-split-json-picker",
+    `popup=yes,width=${width},height=${height},left=${left},top=${top}`,
+  );
+  if (!state.pickerWindow) {
+    state.statusKind = "error";
+    state.statusText =
+      "Popup blocked. Allow popups for this site, or grant folder access and try again.";
+    render();
+  }
+}
+
 async function readFolderSplitData() {
   if (!state.folderHandle || state.folderPermission !== "granted") return null;
   try {
@@ -1734,6 +2026,7 @@ function captureAssembleLayer(requestId) {
         index: job.index,
         total: job.layers.length,
         name: layer.name,
+        knownLayerIds: job.knownLayerIds || [],
       }),
     );
   } catch (error) {
@@ -1752,6 +2045,10 @@ function runAssembleBatchFinish(requestId) {
 
   job.phase = "batching";
   job.batchDone = false;
+  // Never complete Assemble from Photopea "done" — the last capture script also
+  // emits "done", which raced the batch step and left layers unpositioned.
+  // Completion is only via assemble-batch (or the request timeout).
+  job.awaitingBatchDone = false;
   setWorking(
     "batching",
     `Positioning ${job.placements.length} Smart Object${job.placements.length === 1 ? "" : "s"} in “${job.groupName}”…`,
@@ -1775,14 +2072,23 @@ function runAssembleBatchFinish(requestId) {
   }
 }
 
-function completeAssembleJob(placedCount) {
+function completeAssembleJob(placedCount, options = {}) {
   const job = state._assembleJob;
   const groupName = (job && job.groupName) || "elements";
   const total = (job && job.layers && job.layers.length) || placedCount;
+  const failed = Number(options.failed) || 0;
+  const warn = options.message || "";
   clearActiveRequest();
   state.stage = "complete";
-  state.statusKind = "ok";
-  state.statusText = `Assembled ${placedCount || total} Smart Object${(placedCount || total) === 1 ? "" : "s"} in “${groupName}”.`;
+  if (failed > 0) {
+    state.statusKind = "error";
+    state.statusText =
+      warn ||
+      `Assembled ${placedCount || 0} of ${total} Smart Objects in “${groupName}”; ${failed} failed.`;
+  } else {
+    state.statusKind = "ok";
+    state.statusText = `Assembled ${placedCount || total} Smart Object${(placedCount || total) === 1 ? "" : "s"} in “${groupName}”.`;
+  }
   state._assembleJob = null;
   render();
 }
@@ -1883,8 +2189,10 @@ async function beginAssemble() {
       phase: "ensure",
       captureRetries: 0,
       placements: [],
+      knownLayerIds: [],
       batchDone: false,
       awaitingOpenDone: false,
+      awaitingBatchDone: false,
     };
 
     setWorking(
@@ -1998,31 +2306,35 @@ async function finishScanAnalysis(requestId, pngBuffer, meta) {
     let labels = labeled.labels;
     let components = labeled.components;
     let restored = false;
+    const restoreMode = state.scanMode === "restore";
 
-    const stored = pickStoredSplitData(
-      meta,
-      decoded.fullWidth,
-      decoded.fullHeight,
-    );
-    if (stored && labeled.components.length) {
-      const matched = CORE.matchComponentsToElements(
-        labeled.labels,
-        labeled.components,
-        stored.elements,
-        decoded.imageData.width,
-        decoded.imageData.height,
-        Number(stored.document && stored.document.width) || decoded.fullWidth,
-        Number(stored.document && stored.document.height) || decoded.fullHeight,
+    // Generate starts from a fresh CCL. Restore remaps ids to stored elements.
+    if (restoreMode) {
+      const stored = pickStoredSplitData(
+        meta,
+        decoded.fullWidth,
+        decoded.fullHeight,
       );
-      if (matched.matched > 0) {
-        labels = matched.labels;
-        components = CORE.buildComponentsFromLabels(
-          labels,
+      if (stored && labeled.components.length) {
+        const matched = CORE.matchComponentsToElements(
+          labeled.labels,
+          labeled.components,
+          stored.elements,
           decoded.imageData.width,
           decoded.imageData.height,
-          settings.minSize,
+          Number(stored.document && stored.document.width) || decoded.fullWidth,
+          Number(stored.document && stored.document.height) || decoded.fullHeight,
         );
-        restored = components.length > 0;
+        if (matched.matched > 0) {
+          labels = matched.labels;
+          components = CORE.buildComponentsFromLabels(
+            labels,
+            decoded.imageData.width,
+            decoded.imageData.height,
+            settings.minSize,
+          );
+          restored = components.length > 0;
+        }
       }
     }
 
@@ -2057,15 +2369,17 @@ async function finishScanAnalysis(requestId, pngBuffer, meta) {
     state.statusKind = components.length ? "ok" : "error";
     const scaleNote =
       decoded.scale < 0.999
-        ? " Preview used a downscaled pass; Export rebuilds at full resolution."
+        ? " Edit used a downscaled pass; Export rebuilds at full resolution."
         : "";
     if (!components.length) {
       state.statusText =
         "No elements matched your thresholds. Lower alpha threshold or min pixels.";
     } else if (restored) {
       state.statusText = `Restored ${components.length} element${components.length === 1 ? "" : "s"} from Alpha Split data.${scaleNote}`;
+    } else if (restoreMode) {
+      state.statusText = `Could not match stored boxes — generated ${components.length} fresh element${components.length === 1 ? "" : "s"}.${scaleNote}`;
     } else {
-      state.statusText = `Preview ready: ${components.length} separate element${components.length === 1 ? "" : "s"} detected.${scaleNote}`;
+      state.statusText = `ID Mask ready: ${components.length} separate element${components.length === 1 ? "" : "s"} detected.${scaleNote}`;
     }
     render();
   } catch (error) {
@@ -2075,7 +2389,7 @@ async function finishScanAnalysis(requestId, pngBuffer, meta) {
 
 async function ensureFullResolutionScan(requestId, settings) {
   const scan = state.scan;
-  if (!scan) throw new Error("Preview data is missing. Run Preview again.");
+  if (!scan) throw new Error("ID Mask data is missing. Run Generate or Restore ID Mask again.");
 
   if (scan.labelsEdited) {
     if (scan.exportLabels && scan.exportImageData && scan.labelsCommitted) {
@@ -2087,7 +2401,7 @@ async function ensureFullResolutionScan(requestId, settings) {
       };
     }
     if (!scan.pngBuffer) {
-      throw new Error("Preview data is missing. Run Preview again.");
+      throw new Error("ID Mask data is missing. Run Generate or Restore ID Mask again.");
     }
 
     const timeoutMs = operationTimeoutMs(
@@ -2155,7 +2469,7 @@ async function ensureFullResolutionScan(requestId, settings) {
     return scan;
   }
   if (!scan.pngBuffer) {
-    throw new Error("Preview data is missing. Run Preview again.");
+    throw new Error("ID Mask data is missing. Run Generate or Restore ID Mask again.");
   }
 
   const timeoutMs = operationTimeoutMs(
@@ -2209,7 +2523,7 @@ async function ensureFullResolutionScan(requestId, settings) {
   };
 }
 
-function beginScan() {
+function beginScan(mode = "generate") {
   if (!state.embedded) {
     state.statusKind = "idle";
     state.statusText = "Install the plugin to use it inside Photopea.";
@@ -2217,6 +2531,18 @@ function beginScan() {
     return;
   }
   if (state.statusKind === "working") return;
+
+  if (mode === "restore") {
+    const data = state.latestSplitData || state.folderData;
+    const validation = DATA.validateSplitData(data);
+    if (!validation.ok || !data.elements.length) {
+      state.statusKind = "error";
+      state.statusText =
+        "Load Alpha Split data first (data layer or JSON file), then Restore ID Mask.";
+      render();
+      return;
+    }
+  }
 
   readInputs();
   const validation = CORE.validateSettings(settingsFromState());
@@ -2229,14 +2555,23 @@ function beginScan() {
   }
 
   const requestId = createRequestId();
+  state.scanMode = mode === "restore" ? "restore" : "generate";
   state.scan = null;
   state.pendingBinary = null;
   state.pendingDone = false;
   state._scanMeta = null;
   state.expectBinary = true;
+
+  const docHint = state.latestSplitData?.document;
+  const sizeHint =
+    docHint && docHint.width && docHint.height
+      ? ` ${docHint.width}×${docHint.height}`
+      : "";
   setWorking(
     "receiving snapshot",
-    "Snapshotting the document (large files take a while)…",
+    mode === "restore"
+      ? `Capturing layer for Restore ID Mask${sizeHint}…`
+      : `Snapshotting the document${sizeHint} (large files take a while)…`,
     requestId,
     "scan",
   );
@@ -2261,9 +2596,10 @@ async function beginExport() {
     return;
   }
   if (state.statusKind === "working") return;
-  if (!state.scan || !state.scan.components.length) {
+  if (!state.scan || !state.scan.components.length || state.scan.schematic) {
     state.statusKind = "error";
-    state.statusText = "Preview a layer before exporting.";
+    state.statusText =
+      "Generate or Restore an ID Mask before exporting.";
     render();
     return;
   }
@@ -2293,7 +2629,7 @@ async function beginExport() {
   ) {
     state.statusKind = "error";
     state.statusText =
-      "Detection settings changed. Run Preview again before exporting.";
+      "Detection settings changed. Run Generate or Restore ID Mask again before exporting.";
     render();
     return;
   }
@@ -2520,11 +2856,8 @@ function handleDone() {
       return;
     }
 
-    if (state.stage === "batching" && job.phase === "batching" && !job.batchDone) {
-      // Backup if assemble-batch echo was dropped.
-      job.batchDone = true;
-      completeAssembleJob(job.placements.length);
-    }
+    // Capture scripts also emit "done". Never treat it as Assemble completion —
+    // only assemble-batch may finish the job (see awaitingBatchDone / batchDone).
     return;
   }
 
@@ -2643,6 +2976,9 @@ function handleTaggedMessage(payload) {
       x: source.x,
       y: source.y,
     });
+    if (payload.layerId != null && payload.layerId >= 0) {
+      job.knownLayerIds.push(payload.layerId);
+    }
     // Drop the heavy dataUrl once placed so memory stays reasonable.
     source.dataUrl = null;
     job.index = payload.index + 1;
@@ -2657,8 +2993,14 @@ function handleTaggedMessage(payload) {
     }
     const job = state._assembleJob;
     if (job && job.batchDone) return;
-    if (job) job.batchDone = true;
-    completeAssembleJob(payload.placed || (job && job.placements.length) || 0);
+    if (job) {
+      job.awaitingBatchDone = false;
+      job.batchDone = true;
+    }
+    completeAssembleJob(payload.placed || (job && job.placements.length) || 0, {
+      failed: payload.failed || 0,
+      message: payload.message || "",
+    });
     return;
   }
 
@@ -2724,9 +3066,14 @@ function downloadInstaller() {
 function bindEvents() {
   document.querySelectorAll("[data-run]").forEach((button) => {
     button.addEventListener("click", () => {
-      if (button.dataset.run === "scan") beginScan();
+      if (button.dataset.run === "scan" || button.dataset.run === "generate-mask") {
+        beginScan("generate");
+      }
+      if (button.dataset.run === "restore-mask") beginScan("restore");
       if (button.dataset.run === "export") beginExport();
       if (button.dataset.run === "assemble") beginAssemble();
+      if (button.dataset.run === "load-data-layer") loadDataLayerFromSelection();
+      if (button.dataset.run === "load-data-file") loadDataFileFromFolderOrPicker();
     });
   });
 
@@ -2807,8 +3154,9 @@ function bindEvents() {
       readInputs();
       if (state.statusKind !== "working") {
         state.statusKind = "idle";
-        state.statusText =
-          "Adjust thresholds if needed, then preview the active layer.";
+        state.statusText = hasLoadedSplitData()
+          ? "Adjust thresholds if needed, then Restore or Generate ID Mask."
+          : "Adjust thresholds if needed, then Generate ID Mask.";
       }
     });
     input.addEventListener("change", () => {
@@ -2843,7 +3191,11 @@ async function handlePickerMessage(event) {
       state.folderData &&
       (!state.latestSplitData || !state.latestSplitData.exported)
     ) {
-      applyRestoredSettings(state.folderData, "folder");
+      if (state.folderData.elements && state.folderData.elements.length) {
+        applyLoadedSplitData(state.folderData, "folder");
+      } else {
+        applyRestoredSettings(state.folderData, "folder");
+      }
     }
     render();
 
@@ -2859,6 +3211,29 @@ async function handlePickerMessage(event) {
     return;
   }
 
+  if (event.data.type === JSON_READY_MESSAGE) {
+    const text = event.data.text;
+    if (!text) {
+      state.statusKind = "error";
+      state.statusText = "No JSON file contents were returned.";
+      render();
+      return;
+    }
+    try {
+      const parsed = JSON.parse(text);
+      if (!applyLoadedSplitData(parsed, "file")) {
+        render();
+        return;
+      }
+      render();
+    } catch {
+      state.statusKind = "error";
+      state.statusText = "The selected file is not valid Alpha Split JSON.";
+      render();
+    }
+    return;
+  }
+
   if (event.data.type === CANCEL_MESSAGE) {
     state.exportAfterFolderChoice = false;
     state.assembleAfterFolderChoice = false;
@@ -2866,7 +3241,9 @@ async function handlePickerMessage(event) {
     state.statusText =
       event.data.reason === "unsupported"
         ? "Folder access is unavailable. Switch destination to ZIP."
-        : "No export folder was selected.";
+        : event.data.reason === "json-cancelled"
+          ? "No data file was selected."
+          : "No export folder was selected.";
     render();
   }
 }
@@ -2875,7 +3252,9 @@ window.addEventListener("message", (event) => {
   if (
     event.data &&
     typeof event.data === "object" &&
-    (event.data.type === READY_MESSAGE || event.data.type === CANCEL_MESSAGE)
+    (event.data.type === READY_MESSAGE ||
+      event.data.type === CANCEL_MESSAGE ||
+      event.data.type === JSON_READY_MESSAGE)
   ) {
     handlePickerMessage(event);
     return;
@@ -2928,13 +3307,21 @@ async function restoreSavedSettings() {
     const layerData = await requestDataLayerRead();
     if (!canRestoreSettings()) return false;
     if (layerData) {
-      applyRestoredSettings(layerData, "document");
+      if (layerData.elements && layerData.elements.length) {
+        applyLoadedSplitData(layerData, "document");
+      } else {
+        applyRestoredSettings(layerData, "document");
+      }
       render();
       return true;
     }
   }
   if (state.folderData) {
-    applyRestoredSettings(state.folderData, "folder");
+    if (state.folderData.elements && state.folderData.elements.length) {
+      applyLoadedSplitData(state.folderData, "folder");
+    } else {
+      applyRestoredSettings(state.folderData, "folder");
+    }
     render();
     return true;
   }

@@ -2,6 +2,27 @@
 
 All notable changes to Alpha Split for Photopea are documented here.
 
+## [1.3.4] - 2026-07-28
+
+### Fixed
+
+- Assemble capture finds newly placed `"image"` Smart Objects by id (not just
+  `activeLayer`), and batch completion waits for `assemble-batch` so the last
+  capture `"done"` can no longer skip positioning.
+- Batch finish resolves layers by id or name and reports failed placements.
+
+### Added
+
+- **Generate ID Mask** / **Restore ID Mask** replace Preview: restore rematches
+  stored element boxes; generate starts from a fresh detect.
+- Loading Alpha Split data (auto, **Load data layer**, or **Load data file**)
+  shows an instant schematic layout; Restore builds the editable mask.
+- JSON file picker for `alpha-split-data.json` when folder access is unavailable.
+
+### Verification
+
+- Automated checks passed on 28 July 2026.
+
 ## [1.3.3] - 2026-07-28
 
 ### Fixed
