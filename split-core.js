@@ -123,8 +123,19 @@
     };
   }
 
+  function createImageData(width, height) {
+    if (typeof ImageData === "function") {
+      return new ImageData(width, height);
+    }
+    return {
+      width: width,
+      height: height,
+      data: new Uint8ClampedArray(width * height * 4),
+    };
+  }
+
   function extractComponent(imageData, labels, componentId) {
-    var out = new ImageData(imageData.width, imageData.height);
+    var out = createImageData(imageData.width, imageData.height);
     var src = imageData.data;
     var dst = out.data;
     var i;
@@ -150,7 +161,7 @@
     var y0 = component.minY;
     var width = component.maxX - component.minX + 1;
     var height = component.maxY - component.minY + 1;
-    var out = new ImageData(width, height);
+    var out = createImageData(width, height);
     var dst = out.data;
     var y;
     var x;
