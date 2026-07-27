@@ -50,6 +50,9 @@ const state = {
   requestTimer: null,
   pendingBinary: null,
   pendingDone: false,
+  // Data-layer traffic runs on its own tokens so it never blocks the panel.
+  dataLayerWaits: new Map(),
+  latestSplitData: null,
 };
 
 function escapeHtml(value) {
@@ -428,16 +431,6 @@ function clearActiveRequest() {
 }
 
 function failActiveRequest(message) {
-  if (state._dataLayerWait) {
-    const wait = state._dataLayerWait;
-    state._dataLayerWait = null;
-    wait.reject(new Error(message));
-  }
-  if (state._dataLayerReadWait) {
-    const wait = state._dataLayerReadWait;
-    state._dataLayerReadWait = null;
-    wait.resolve(null);
-  }
   clearActiveRequest();
   state.stage = "error";
   state.statusKind = "error";
@@ -1465,70 +1458,58 @@ function bytesToDataUrl(bytes, mimeType) {
   return `data:${mimeType};base64,${btoa(binary)}`;
 }
 
-function upsertDataLayer(data) {
-  return new Promise((resolve, reject) => {
-    if (!state.embedded) {
-      resolve(false);
-      return;
-    }
-    const requestId = createRequestId();
-    const jsonText = JSON.stringify(data, null, 2);
-    const previousKind = state.statusKind;
-    const previousText = state.statusText;
-    state._dataLayerWait = {
-      requestId,
-      resolve: (value) => {
-        state.statusKind = previousKind === "working" ? "ok" : previousKind;
-        state.statusText = previousText;
-        resolve(value);
-      },
-      reject,
-    };
-    setWorking(
-      "saving data",
-      "Saving Alpha Split data layer…",
-      requestId,
-      "data-layer",
-      30000,
-    );
-    try {
-      postScript(makeUpsertDataLayerScript({ requestId, jsonText }));
-    } catch (error) {
-      state._dataLayerWait = null;
-      clearActiveRequest();
-      reject(error);
-    }
-  });
-}
-
-function requestDataLayerRead() {
+// Data-layer scripts are best-effort: they keep their own token and timer so a
+// silent Photopea never leaves the panel in a working state.
+function sendDataLayerScript(requestId, script, timeoutMs) {
   return new Promise((resolve) => {
     if (!state.embedded) {
       resolve(null);
       return;
     }
-    const requestId = createRequestId();
-    state._dataLayerReadWait = {
-      requestId,
-      resolve: (value) => {
-        resolve(value);
-      },
+    const settle = (payload) => {
+      if (!state.dataLayerWaits.has(requestId)) return;
+      window.clearTimeout(state.dataLayerWaits.get(requestId).timer);
+      state.dataLayerWaits.delete(requestId);
+      resolve(payload);
     };
-    setWorking(
-      "reading data",
-      "Reading Alpha Split data layer…",
-      requestId,
-      "data-layer-read",
-      20000,
-    );
+    const timer = window.setTimeout(() => settle(null), timeoutMs || 8000);
+    state.dataLayerWaits.set(requestId, { timer, settle });
     try {
-      postScript(makeReadDataLayerScript(requestId));
+      postScript(script);
     } catch {
-      state._dataLayerReadWait = null;
-      clearActiveRequest();
-      resolve(null);
+      settle(null);
     }
   });
+}
+
+async function upsertDataLayer(data) {
+  const requestId = createRequestId();
+  const jsonText = JSON.stringify(data, null, 2);
+  const payload = await sendDataLayerScript(
+    requestId,
+    makeUpsertDataLayerScript({ requestId, jsonText }),
+    15000,
+  );
+  return !!(payload && payload.ok);
+}
+
+async function requestDataLayerRead() {
+  const requestId = createRequestId();
+  const payload = await sendDataLayerScript(
+    requestId,
+    makeReadDataLayerScript(requestId),
+    8000,
+  );
+  if (!payload || !payload.ok || !payload.found || !payload.jsonText) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(payload.jsonText);
+    const validation = DATA.validateSplitData(parsed);
+    return validation.ok ? parsed : null;
+  } catch {
+    return null;
+  }
 }
 
 function applyRestoredSettings(data, sourceLabel) {
@@ -2099,15 +2080,8 @@ async function beginExport() {
       await writeFolderSplitData(splitData);
     }
 
-    try {
-      await upsertDataLayer(splitData);
-    } catch {
-      // Layer write is best-effort; files already exported.
-    }
+    await upsertDataLayer(splitData);
 
-    if (state.activeRequestId && state.activeRequestId !== requestId) {
-      // Upsert replaced the active request; clear if still hanging.
-    }
     clearActiveRequest();
     state.stage = "complete";
     state.statusKind = "ok";
@@ -2244,18 +2218,14 @@ function handleDone() {
 function handleTaggedMessage(payload) {
   if (!payload) return;
 
-  // Data-layer replies must match their own wait tokens (may arrive while idle).
-  if (
-    payload.type === "data-layer" &&
-    ((state._dataLayerWait && state._dataLayerWait.requestId === payload.requestId) ||
-      (state._dataLayerReadWait &&
-        state._dataLayerReadWait.requestId === payload.requestId))
-  ) {
-    // Fall through with activeRequestId check skipped below via dedicated branch.
-  } else if (
-    !state.activeRequestId ||
-    payload.requestId !== state.activeRequestId
-  ) {
+  // Data-layer replies carry their own token and can arrive while idle.
+  if (payload.type === "data-layer") {
+    const wait = state.dataLayerWaits.get(payload.requestId);
+    if (wait) wait.settle(payload);
+    return;
+  }
+
+  if (!state.activeRequestId || payload.requestId !== state.activeRequestId) {
     return;
   }
 
@@ -2284,39 +2254,6 @@ function handleTaggedMessage(payload) {
     const pngBuffer = state._pendingPng;
     state._pendingPng = null;
     finishScanAnalysis(payload.requestId, pngBuffer, state._scanMeta);
-    return;
-  }
-
-  if (payload.type === "data-layer") {
-    if (state._dataLayerWait && state._dataLayerWait.requestId === payload.requestId) {
-      const wait = state._dataLayerWait;
-      state._dataLayerWait = null;
-      clearActiveRequest();
-      if (!payload.ok) {
-        wait.reject(new Error(payload.message || "Could not write data layer."));
-        return;
-      }
-      wait.resolve(true);
-      render();
-      return;
-    }
-    if (state._dataLayerReadWait && state._dataLayerReadWait.requestId === payload.requestId) {
-      const wait = state._dataLayerReadWait;
-      state._dataLayerReadWait = null;
-      clearActiveRequest();
-      if (!payload.ok || !payload.found || !payload.jsonText) {
-        wait.resolve(null);
-        return;
-      }
-      try {
-        const parsed = JSON.parse(payload.jsonText);
-        const validation = DATA.validateSplitData(parsed);
-        wait.resolve(validation.ok ? parsed : null);
-      } catch {
-        wait.resolve(null);
-      }
-      return;
-    }
     return;
   }
 
@@ -2566,26 +2503,59 @@ state.statusText = state.embedded
   ? "Select a layer with transparent gaps, then preview."
   : "Interactive plugin preview.";
 
-async function bootstrapPanel() {
-  await loadStoredDirectoryHandle();
-  if (state.folderPermission === "granted") {
-    await readFolderSplitData();
-  }
+function canRestoreSettings() {
+  // Never overwrite inputs once the user has started working in this session.
+  return !state.activeRequestId && !state.scan && state.stage === "idle";
+}
+
+async function restoreSavedSettings() {
+  if (!canRestoreSettings()) return false;
   if (state.embedded) {
-    try {
-      const layerData = await requestDataLayerRead();
-      if (layerData) {
-        applyRestoredSettings(layerData, "document");
-      } else if (state.folderData) {
-        applyRestoredSettings(state.folderData, "folder");
-      }
-    } catch {
-      // Soft restore only.
+    const layerData = await requestDataLayerRead();
+    if (!canRestoreSettings()) return false;
+    if (layerData) {
+      applyRestoredSettings(layerData, "document");
+      render();
+      return true;
     }
-  } else if (state.folderData) {
+  }
+  if (state.folderData) {
     applyRestoredSettings(state.folderData, "folder");
+    render();
+    return true;
+  }
+  return false;
+}
+
+async function bootstrapPanel() {
+  // Paint first so the panel is usable even if storage or Photopea is slow.
+  render();
+  try {
+    await loadStoredDirectoryHandle();
+    if (state.folderPermission === "granted") {
+      await readFolderSplitData();
+    }
+  } catch {
+    // Folder memory is optional.
   }
   render();
+
+  if (!state.embedded) {
+    await restoreSavedSettings();
+    return;
+  }
+
+  // Photopea may not accept scripts the instant the panel loads, so the silent
+  // restore is deferred and retried once instead of holding the panel hostage.
+  const attempt = async () => {
+    if (await restoreSavedSettings()) return;
+    window.setTimeout(() => {
+      restoreSavedSettings().catch(() => {});
+    }, 2500);
+  };
+  window.setTimeout(() => {
+    attempt().catch(() => {});
+  }, 400);
 }
 
 bootstrapPanel();

@@ -2,6 +2,17 @@
 
 All notable changes to Alpha Split for Photopea are documented here.
 
+## [1.3.1] - 2026-07-28
+
+### Fixed
+
+- Opening the panel no longer shows a working spinner or blocks the buttons: the
+  settings restore read is deferred, silent, and retried once, so a Photopea
+  that is not yet accepting scripts can no longer leave the panel stuck.
+- Data-layer reads and writes now use their own tokens and timeouts instead of
+  the shared request slot, so they cannot hijack or stall Export.
+- Brighter sidebar icon to match the other Photopea plugin icons.
+
 ## [1.3.0] - 2026-07-27
 
 ### Added

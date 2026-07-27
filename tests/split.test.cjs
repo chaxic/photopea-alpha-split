@@ -149,6 +149,18 @@ test("installer page loads zip-util and export wording", () => {
   assert.match(app, /propagateLabelsToFullRes/);
 });
 
+test("data-layer traffic never occupies the blocking request slot", () => {
+  const app = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
+  assert.match(app, /sendDataLayerScript/);
+  assert.match(app, /dataLayerWaits/);
+  // setWorking disables the panel and starts the stuck-request timer.
+  assert.doesNotMatch(app, /setWorking\(\s*"reading data"/);
+  assert.doesNotMatch(app, /setWorking\(\s*"saving data"/);
+  // The restore read must be deferred, not fired during panel construction.
+  assert.match(app, /restoreSavedSettings/);
+  assert.doesNotMatch(app, /await requestDataLayerRead\(\);\s*\n\s*if \(layerData\)/);
+});
+
 test("buildSplitData creates sequential filenames and bboxes", () => {
   const built = data.buildSplitData({
     settings: {

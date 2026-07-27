@@ -5,11 +5,11 @@ opaque regions through the alpha channel, lets you fix the detection in an
 interactive preview, exports each region as a cropped PNG, and can reassemble
 those PNGs as Smart Objects.
 
-**Current version:** v1.3.0  
+**Current version:** v1.3.1  
 **Compatibility:** Tested with Photopea 5.6 · scripting v30  
 **Last verified:** 27 July 2026
 
-**Live plugin:** [chaxic.github.io/photopea-alpha-split](https://chaxic.github.io/photopea-alpha-split/?v=1.3.0)
+**Live plugin:** [chaxic.github.io/photopea-alpha-split](https://chaxic.github.io/photopea-alpha-split/?v=1.3.1)
 
 ## Features
 
@@ -30,18 +30,18 @@ those PNGs as Smart Objects.
 
 ### Public GitHub Pages
 
-1. Open the [installer page](https://chaxic.github.io/photopea-alpha-split/?v=1.3.0).
+1. Open the [installer page](https://chaxic.github.io/photopea-alpha-split/?v=1.3.1).
 2. Download `alpha-split-photopea.json`.
 3. In Photopea, open **Window → Plugins → Add Plugin**.
 4. Select the downloaded JSON file.
-5. Open the panel and confirm the badge shows **v1.3.0**.
+5. Open the panel and confirm the badge shows **v1.3.1**.
 
 ### Local development
 
 1. Run `npm run dev` (serves at `http://127.0.0.1:4178`).
 2. In Photopea, open **Window → Plugins → Add Plugin**.
 3. Select `plugin.local.json` from this folder.
-4. Confirm the panel shows **v1.3.0** and the α icon.
+4. Confirm the panel shows **v1.3.1** and the α icon.
 
 ## Use
 
