@@ -1,48 +1,54 @@
 # Alpha Split for Photopea
 
 A lightweight, client-side Photopea sidebar plugin that detects disconnected
-opaque regions through the alpha channel and exports each as a cropped PNG.
+opaque regions through the alpha channel, lets you fix the detection in an
+interactive preview, and exports each region as a cropped PNG.
 
-**Current version:** v1.2.0  
+**Current version:** v1.2.2  
 **Compatibility:** Tested with Photopea 5.6 · scripting v30  
 **Last verified:** 27 July 2026
+
+**Live plugin:** [chaxic.github.io/photopea-alpha-split](https://chaxic.github.io/photopea-alpha-split/?v=1.2.2)
 
 ## Features
 
 - Connected-component detection on the active layer alpha channel
-- Alpha threshold and minimum pixel size controls
-- Interactive preview: Sample / Fill to join or separate elements
-- Randomize colors and Update to commit the edited element list
+- Alpha threshold, minimum pixel size, and 4/8-connected controls
+- Interactive preview with solid colour-coded label IDs
+- **Sample** / **Fill** / **New** to join or separate elements before export
+- Hover tooltip with element name and colour swatch; Fill mode shows a target outline
+- **Randomize colors** and **Update** to commit the edited element list
 - Workfile-safe preview via an independent temporary PSD snapshot
 - Export cropped PNGs to a remembered folder, or download a ZIP
-- Request IDs, stage progress, and failure timeouts
-- No server, account, database, or document upload
+- Responsive preview canvas that scales with the panel width
+- No server, account, or document upload
 
 ## Install
+
+### Public GitHub Pages
+
+1. Open the [installer page](https://chaxic.github.io/photopea-alpha-split/?v=1.2.2).
+2. Download `alpha-split-photopea.json`.
+3. In Photopea, open **Window → Plugins → Add Plugin**.
+4. Select the downloaded JSON file.
+5. Open the panel and confirm the badge shows **v1.2.2**.
 
 ### Local development
 
 1. Run `npm run dev` (serves at `http://127.0.0.1:4178`).
 2. In Photopea, open **Window → Plugins → Add Plugin**.
 3. Select `plugin.local.json` from this folder.
-4. Confirm the panel shows **v1.2.0** and the α icon.
-
-### Public GitHub Pages
-
-1. Open the [v1.2.0 installer page](https://chaxic.github.io/photopea-alpha-split/?v=1.2.0).
-2. Download `alpha-split-photopea.json`.
-3. In Photopea, open **Window → Plugins → Add Plugin**.
-4. Select the downloaded JSON file.
-5. Open the panel and confirm that it shows **v1.2.0**.
+4. Confirm the panel shows **v1.2.2** and the α icon.
 
 ## Use
 
 1. Select one image layer with transparent gaps between elements.
 2. Choose **Preview** to detect regions without changing the workfile.
 3. Optionally edit the preview:
+   - Hover an element to see its name and colour swatch.
    - **Sample** — click an element to store its label.
    - **New** then **Fill** — assign a fresh label to the clicked island (separate).
-   - **Sample** A then **Fill** B — merge B into A (join).
+   - **Sample** A then **Fill** B — merge B into A (join). Fill mode outlines the target island before you click.
    - **Randomize colors** — reshuffle display colours only.
    - **Update** — rebuild the element count from your edits.
 4. Choose a destination (**Folder** or **ZIP**).
