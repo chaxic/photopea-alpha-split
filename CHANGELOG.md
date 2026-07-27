@@ -2,6 +2,19 @@
 
 All notable changes to Alpha Split for Photopea are documented here.
 
+## [1.0.3] - 2026-07-27
+
+### Changed
+
+- Preview now analyses a downscaled copy (max 2048px on the long side) so 8K
+  sheets stay responsive.
+- Split rebuilds masks at full resolution once, then places cropped layers.
+- Timeouts scale with document megapixels and element count.
+
+### Verification
+
+- Automated checks passed on 27 July 2026.
+
 ## [1.0.2] - 2026-07-27
 
 ### Fixed

@@ -156,7 +156,11 @@ function panelHtml() {
           <p class="preview-meta" id="preview-meta">
             ${
               state.scan
-                ? `Colored regions show what will become separate layers · ${state.scan.width}×${state.scan.height}`
+                ? `Colored regions show what will become separate layers · ${state.scan.width}×${state.scan.height}${
+                    state.scan.analysisScale < 0.999
+                      ? ` · preview @ ${state.scan.analysisWidth}×${state.scan.analysisHeight}`
+                      : ""
+                  }`
                 : "Preview detects separate opaque regions without changing your document."
             }
           </p>
@@ -278,19 +282,36 @@ function failActiveRequest(message) {
   render();
 }
 
-function setWorking(stage, message, requestId, operation) {
+function operationTimeoutMs(operation, meta, elementCount) {
+  const width = Number(meta && meta.width) || 0;
+  const height = Number(meta && meta.height) || 0;
+  const megapixels = (width * height) / 1e6;
+  const base = META.requestTimeoutMs || 180000;
+  if (operation === "scan") {
+    return Math.min(900000, Math.max(base, 90000 + megapixels * 12000));
+  }
+  return Math.min(
+    1200000,
+    Math.max(base, 120000 + megapixels * 8000 + (elementCount || 0) * 6000),
+  );
+}
+
+function setWorking(stage, message, requestId, operation, timeoutMs) {
   state.activeRequestId = requestId;
   state.activeOperation = operation;
   state.stage = stage;
   state.statusKind = "working";
   state.statusText = message;
   if (state.requestTimer !== null) window.clearTimeout(state.requestTimer);
+  const waitMs =
+    timeoutMs ||
+    operationTimeoutMs(operation, state._scanMeta || (state.scan && state.scan.meta), state.scan && state.scan.components && state.scan.components.length);
   state.requestTimer = window.setTimeout(() => {
     if (state.activeRequestId !== requestId) return;
     failActiveRequest(
       `Photopea did not respond while ${stage}. Close and reopen the panel, then try again.`,
     );
-  }, META.requestTimeoutMs);
+  }, waitMs);
 }
 
 function postScript(script) {
@@ -619,18 +640,30 @@ function makePlaceLayerScript({
 }());`;
 }
 
-function decodePng(buffer) {
+function decodePng(buffer, maxSide) {
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(new Blob([buffer], { type: "image/png" }));
     const img = new Image();
     img.onload = () => {
+      const fullWidth = img.naturalWidth;
+      const fullHeight = img.naturalHeight;
+      const limit = Number(maxSide) > 0 ? Number(maxSide) : 0;
+      const scale =
+        limit > 0 ? Math.min(1, limit / Math.max(fullWidth, fullHeight)) : 1;
+      const width = Math.max(1, Math.round(fullWidth * scale));
+      const height = Math.max(1, Math.round(fullHeight * scale));
       const canvas = document.createElement("canvas");
-      canvas.width = img.naturalWidth;
-      canvas.height = img.naturalHeight;
+      canvas.width = width;
+      canvas.height = height;
       const ctx = canvas.getContext("2d", { willReadFrequently: true });
-      ctx.drawImage(img, 0, 0);
+      ctx.drawImage(img, 0, 0, width, height);
       URL.revokeObjectURL(url);
-      resolve(ctx.getImageData(0, 0, canvas.width, canvas.height));
+      resolve({
+        imageData: ctx.getImageData(0, 0, width, height),
+        fullWidth,
+        fullHeight,
+        scale,
+      });
     };
     img.onerror = () => {
       URL.revokeObjectURL(url);
@@ -657,7 +690,10 @@ function imageDataToDataUrl(imageData) {
 function drawPreview(scan) {
   const canvas = document.querySelector("#preview-canvas");
   if (!canvas || !scan || !scan.imageData) return;
-  const { width, height, labels, imageData } = scan;
+  const width = scan.imageData.width;
+  const height = scan.imageData.height;
+  const labels = scan.labels;
+  const imageData = scan.imageData;
   const maxSide = 512;
   const scale = Math.min(1, maxSide / Math.max(width, height));
   const dw = Math.max(1, Math.round(width * scale));
@@ -714,7 +750,14 @@ function yieldToUi() {
 async function finishScanAnalysis(requestId, pngBuffer, meta) {
   if (state.activeRequestId !== requestId) return;
 
-  setWorking("processing", "Detecting separate alpha regions…", requestId, "scan");
+  const timeoutMs = operationTimeoutMs("scan", meta, 0);
+  setWorking(
+    "processing",
+    "Detecting separate alpha regions…",
+    requestId,
+    "scan",
+    timeoutMs,
+  );
   render();
 
   const settings = settingsFromState();
@@ -725,22 +768,28 @@ async function finishScanAnalysis(requestId, pngBuffer, meta) {
   }
 
   try {
-    const imageData = await decodePng(pngBuffer);
+    // Preview uses a downscaled analysis image so 8K documents stay responsive.
+    const decoded = await decodePng(pngBuffer, META.previewMaxSide || 2048);
     if (state.activeRequestId !== requestId) return;
 
     const labeled = CORE.labelComponents(
-      imageData,
+      decoded.imageData,
       settings.alphaThreshold,
       settings.minSize,
       settings.eightConnected,
     );
 
     state.scan = {
-      imageData,
+      imageData: decoded.imageData,
       labels: labeled.labels,
       components: labeled.components,
-      width: labeled.width,
-      height: labeled.height,
+      width: decoded.fullWidth,
+      height: decoded.fullHeight,
+      analysisWidth: labeled.width,
+      analysisHeight: labeled.height,
+      analysisScale: decoded.scale,
+      pngBuffer,
+      fullResReady: decoded.scale >= 0.999,
       meta,
       settings,
     };
@@ -748,13 +797,76 @@ async function finishScanAnalysis(requestId, pngBuffer, meta) {
     clearActiveRequest();
     state.stage = "complete";
     state.statusKind = labeled.components.length ? "ok" : "error";
+    const scaleNote =
+      decoded.scale < 0.999
+        ? " Preview used a downscaled pass; Split rebuilds at full resolution."
+        : "";
     state.statusText = labeled.components.length
-      ? `Scan complete: ${labeled.components.length} separate element${labeled.components.length === 1 ? "" : "s"} detected.`
+      ? `Preview ready: ${labeled.components.length} separate element${labeled.components.length === 1 ? "" : "s"} detected.${scaleNote}`
       : "No elements matched your thresholds. Lower alpha threshold or min pixels.";
     render();
   } catch (error) {
     failActiveRequest(error && error.message ? error.message : String(error));
   }
+}
+
+async function ensureFullResolutionScan(requestId, settings) {
+  if (state.scan.fullResReady && state.scan.imageData) {
+    return state.scan;
+  }
+  if (!state.scan.pngBuffer) {
+    throw new Error("Preview data is missing. Run Preview again.");
+  }
+
+  const timeoutMs = operationTimeoutMs(
+    "split",
+    state.scan.meta,
+    state.scan.components.length,
+  );
+  setWorking(
+    "preparing",
+    "Building full-resolution masks for Split…",
+    requestId,
+    "split",
+    timeoutMs,
+  );
+  render();
+
+  const decoded = await decodePng(state.scan.pngBuffer, 0);
+  if (state.activeRequestId !== requestId) return null;
+
+  setWorking(
+    "preparing",
+    "Detecting elements at full resolution…",
+    requestId,
+    "split",
+    timeoutMs,
+  );
+  render();
+  await yieldToUi();
+
+  const labeled = CORE.labelComponents(
+    decoded.imageData,
+    settings.alphaThreshold,
+    settings.minSize,
+    settings.eightConnected,
+  );
+
+  state.scan = {
+    ...state.scan,
+    imageData: decoded.imageData,
+    labels: labeled.labels,
+    components: labeled.components,
+    width: decoded.fullWidth,
+    height: decoded.fullHeight,
+    analysisWidth: labeled.width,
+    analysisHeight: labeled.height,
+    analysisScale: 1,
+    fullResReady: true,
+    settings,
+  };
+
+  return state.scan;
 }
 
 function beginScan() {
@@ -817,6 +929,7 @@ async function placeNextSplitLayer(requestId) {
     `Creating layer ${job.index + 1} / ${job.layers.length}: ${layer.name}`,
     requestId,
     "split",
+    job.timeoutMs,
   );
   render();
 
@@ -850,7 +963,7 @@ async function beginSplit() {
   if (state.statusKind === "working") return;
   if (!state.scan || !state.scan.components.length) {
     state.statusKind = "error";
-    state.statusText = "Scan a layer before splitting.";
+    state.statusText = "Preview a layer before splitting.";
     render();
     return;
   }
@@ -866,26 +979,35 @@ async function beginSplit() {
   }
 
   const requestId = createRequestId();
-  setWorking("preparing", "Preparing separated layers…", requestId, "split");
+  const timeoutMs = operationTimeoutMs(
+    "split",
+    state.scan.meta,
+    state.scan.components.length,
+  );
+  setWorking("preparing", "Preparing separated layers…", requestId, "split", timeoutMs);
   render();
 
   try {
+    const scan = await ensureFullResolutionScan(requestId, settings);
+    if (!scan || state.activeRequestId !== requestId) return;
+
     const layers = [];
-    for (let index = 0; index < state.scan.components.length; index++) {
+    for (let index = 0; index < scan.components.length; index++) {
       if (state.activeRequestId !== requestId) return;
-      const component = state.scan.components[index];
+      const component = scan.components[index];
       const name = `${settings.prefix}_${padNumber(component.id, 2)}`;
       setWorking(
         "preparing",
-        `Encoding crop ${index + 1} / ${state.scan.components.length}: ${name}`,
+        `Encoding crop ${index + 1} / ${scan.components.length}: ${name}`,
         requestId,
         "split",
+        timeoutMs,
       );
       render();
 
       const crop = CORE.extractComponentCrop(
-        state.scan.imageData,
-        state.scan.labels,
+        scan.imageData,
+        scan.labels,
         component,
       );
       const dataUrl = await imageDataToDataUrl(crop.imageData);
@@ -906,8 +1028,9 @@ async function beginSplit() {
       groupName: `${settings.prefix}s`,
       groupLayers: settings.groupLayers,
       hideSource: settings.hideSource,
-      sourceLayerId: state.scan.meta.layerId,
-      sourceLayerName: state.scan.meta.layerName,
+      sourceLayerId: scan.meta.layerId,
+      sourceLayerName: scan.meta.layerName,
+      timeoutMs,
     };
 
     await placeNextSplitLayer(requestId);

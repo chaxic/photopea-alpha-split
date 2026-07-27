@@ -11,12 +11,13 @@
 
   return Object.freeze({
     name: "Alpha Split",
-    version: "1.0.2",
+    version: "1.0.3",
     testedPhotopea: "5.6",
     scriptingVersion: "30",
     verifiedDate: "2026-07-27",
     verifiedLabel: "27 July 2026",
-    requestTimeoutMs: 120000,
+    requestTimeoutMs: 180000,
+    previewMaxSide: 2048,
     repositoryUrl: "https://github.com/chaxic/photopea-alpha-split",
     pluginUrl: "https://chaxic.github.io/photopea-alpha-split/",
     localPort: 4178,

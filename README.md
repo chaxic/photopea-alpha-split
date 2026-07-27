@@ -3,7 +3,7 @@
 A lightweight, client-side Photopea sidebar plugin that detects disconnected
 opaque regions through the alpha channel and copies each into its own layer.
 
-**Current version:** v1.0.2  
+**Current version:** v1.0.3  
 **Compatibility:** Tested with Photopea 5.6 · scripting v30  
 **Last verified:** 27 July 2026
 
@@ -24,15 +24,15 @@ opaque regions through the alpha channel and copies each into its own layer.
 1. Run `npm run dev` (serves at `http://127.0.0.1:4178`).
 2. In Photopea, open **Window → Plugins → Add Plugin**.
 3. Select `plugin.local.json` from this folder.
-4. Confirm the panel shows **v1.0.2** and the α icon.
+4. Confirm the panel shows **v1.0.3** and the α icon.
 
 ### Public GitHub Pages
 
-1. Open the [v1.0.2 installer page](https://chaxic.github.io/photopea-alpha-split/?v=1.0.2).
+1. Open the [v1.0.3 installer page](https://chaxic.github.io/photopea-alpha-split/?v=1.0.3).
 2. Download `alpha-split-photopea.json`.
 3. In Photopea, open **Window → Plugins → Add Plugin**.
 4. Select the downloaded JSON file.
-5. Open the panel and confirm that it shows **v1.0.2**.
+5. Open the panel and confirm that it shows **v1.0.3**.
 
 ## Use
 
