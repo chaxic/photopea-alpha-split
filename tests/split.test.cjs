@@ -161,14 +161,16 @@ test("data-layer traffic never occupies the blocking request slot", () => {
   assert.doesNotMatch(app, /await requestDataLayerRead\(\);\s*\n\s*if \(layerData\)/);
 });
 
-test("assemble uses two-phase open/finish after Photopea done", () => {
+test("assemble uses import-all then batch position", () => {
   const app = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
   assert.match(app, /makeAssembleOpenScript/);
-  assert.match(app, /makeAssembleFinishScript/);
+  assert.match(app, /makeAssembleCaptureScript/);
+  assert.match(app, /makeAssembleBatchFinishScript/);
   assert.match(app, /makeAssembleEnsureGroupScript/);
   assert.doesNotMatch(app, /makeAssemblePlaceScript/);
-  assert.match(app, /activeOperation === "assemble"/);
-  assert.match(app, /labelsFromElements|CORE\.labelsFromElements/);
+  assert.doesNotMatch(app, /makeAssembleFinishScript/);
+  assert.match(app, /awaitingOpenDone/);
+  assert.match(app, /matchComponentsToElements|CORE\.matchComponentsToElements/);
   assert.match(app, /Restored \$\{components\.length\}|Restored \$\{.*\} element/);
 });
 
@@ -214,6 +216,34 @@ test("labelsFromElements prefers the smaller overlapping bbox", () => {
   );
   assert.equal(painted.labels[1 * 4 + 1], 2);
   assert.equal(painted.labels[0], 1);
+});
+
+test("matchComponentsToElements remaps CCL ids to stored boxes", () => {
+  const labels = new Int32Array(8 * 8);
+  for (let y = 1; y <= 2; y++) {
+    for (let x = 1; x <= 2; x++) labels[y * 8 + x] = 1;
+  }
+  for (let y = 5; y <= 6; y++) {
+    for (let x = 5; x <= 6; x++) labels[y * 8 + x] = 2;
+  }
+  const components = core.buildComponentsFromLabels(labels, 8, 8, 1);
+  const matched = core.matchComponentsToElements(
+    labels,
+    components,
+    [
+      { id: 10, x: 2, y: 2, width: 4, height: 4 },
+      { id: 20, x: 10, y: 10, width: 4, height: 4 },
+    ],
+    8,
+    8,
+    16,
+    16,
+  );
+  assert.equal(matched.matched, 2);
+  assert.equal(matched.labels[1 * 8 + 1], 10);
+  assert.equal(matched.labels[5 * 8 + 5], 20);
+  // Shapes stay non-rectangular: only the opaque CCL pixels are labeled.
+  assert.equal(matched.labels[1 * 8 + 3], 0);
 });
 
 test("buildSplitData creates sequential filenames and bboxes", () => {

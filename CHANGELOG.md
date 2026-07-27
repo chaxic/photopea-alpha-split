@@ -2,6 +2,20 @@
 
 All notable changes to Alpha Split for Photopea are documented here.
 
+## [1.3.3] - 2026-07-28
+
+### Fixed
+
+- Assemble imports every PNG first (recording layer ids), then positions them in
+  one batch script — fewer round trips and no more stall on “Positioning 1/N”.
+- Preview restore matches fresh alpha shapes to stored element boxes instead of
+  painting rectangles, removing the blue box artefacts on reopen.
+- Clearer Preview status text during the slow 8K snapshot / temp / PNG stages.
+
+### Verification
+
+- Automated checks passed on 28 July 2026.
+
 ## [1.3.2] - 2026-07-28
 
 ### Fixed

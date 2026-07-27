@@ -527,6 +527,141 @@
     return { labels: labels, assigned: assigned };
   }
 
+  function scaleStoredBoxes(elements, analysisWidth, analysisHeight, fullWidth, fullHeight) {
+    var aw = analysisWidth | 0;
+    var ah = analysisHeight | 0;
+    var fw = Math.max(1, fullWidth | 0);
+    var fh = Math.max(1, fullHeight | 0);
+    var boxes = [];
+    if (!elements) return boxes;
+    for (var i = 0; i < elements.length; i++) {
+      var el = elements[i];
+      if (!el) continue;
+      var x = Number(el.x) || 0;
+      var y = Number(el.y) || 0;
+      var w = Math.max(1, Number(el.width) || 1);
+      var h = Math.max(1, Number(el.height) || 1);
+      var minX = Math.floor((x * aw) / fw);
+      var minY = Math.floor((y * ah) / fh);
+      var maxX = Math.min(aw - 1, Math.ceil(((x + w) * aw) / fw) - 1);
+      var maxY = Math.min(ah - 1, Math.ceil(((y + h) * ah) / fh) - 1);
+      if (maxX < minX) maxX = minX;
+      if (maxY < minY) maxY = minY;
+      var id = el.id != null ? Number(el.id) : i + 1;
+      if (!Number.isFinite(id) || id <= 0) id = i + 1;
+      boxes.push({
+        id: id,
+        minX: minX,
+        minY: minY,
+        maxX: maxX,
+        maxY: maxY,
+        area: (maxX - minX + 1) * (maxY - minY + 1),
+        used: false,
+      });
+    }
+    return boxes;
+  }
+
+  function boxOverlapArea(a, b) {
+    var x0 = Math.max(a.minX, b.minX);
+    var y0 = Math.max(a.minY, b.minY);
+    var x1 = Math.min(a.maxX, b.maxX);
+    var y1 = Math.min(a.maxY, b.maxY);
+    if (x1 < x0 || y1 < y0) return 0;
+    return (x1 - x0 + 1) * (y1 - y0 + 1);
+  }
+
+  /**
+   * Remap fresh CCL component ids onto stored element ids by best bbox overlap.
+   * Keeps real alpha shapes while restoring previous element identities.
+   */
+  function matchComponentsToElements(
+    labels,
+    components,
+    elements,
+    analysisWidth,
+    analysisHeight,
+    fullWidth,
+    fullHeight,
+  ) {
+    var boxes = scaleStoredBoxes(
+      elements,
+      analysisWidth,
+      analysisHeight,
+      fullWidth,
+      fullHeight,
+    );
+    var remap = new Map();
+    var matched = 0;
+    var nextNewId = 1;
+    var i;
+    for (i = 0; i < boxes.length; i++) {
+      if (boxes[i].id >= nextNewId) nextNewId = boxes[i].id + 1;
+    }
+
+    var sorted = (components || []).slice().sort(function (a, b) {
+      return b.size - a.size || a.id - b.id;
+    });
+
+    for (i = 0; i < sorted.length; i++) {
+      var component = sorted[i];
+      var best = null;
+      var bestScore = 0;
+      var bestCenter = false;
+      var cx = (component.minX + component.maxX) / 2;
+      var cy = (component.minY + component.maxY) / 2;
+      for (var b = 0; b < boxes.length; b++) {
+        var box = boxes[b];
+        if (box.used) continue;
+        var overlap = boxOverlapArea(component, box);
+        if (!overlap) continue;
+        var compArea =
+          (component.maxX - component.minX + 1) *
+          (component.maxY - component.minY + 1);
+        var union = compArea + box.area - overlap;
+        var iou = union > 0 ? overlap / union : 0;
+        var centerInside =
+          cx >= box.minX && cx <= box.maxX && cy >= box.minY && cy <= box.maxY;
+        var score = iou * 1000 + overlap;
+        if (centerInside) score += 500;
+        if (
+          score > bestScore ||
+          (score === bestScore && centerInside && !bestCenter)
+        ) {
+          best = box;
+          bestScore = score;
+          bestCenter = centerInside;
+        }
+      }
+      if (best && (bestCenter || bestScore > 0)) {
+        best.used = true;
+        remap.set(component.id, best.id);
+        matched += 1;
+      } else {
+        remap.set(component.id, nextNewId++);
+      }
+    }
+
+    var outLabels = new Int32Array(labels.length);
+    for (i = 0; i < labels.length; i++) {
+      var oldId = labels[i];
+      if (!oldId) continue;
+      outLabels[i] = remap.has(oldId) ? remap.get(oldId) : oldId;
+    }
+
+    var outComponents = buildComponentsFromLabels(
+      outLabels,
+      analysisWidth,
+      analysisHeight,
+      1,
+    );
+    return {
+      labels: outLabels,
+      components: outComponents,
+      matched: matched,
+    };
+  }
+
   return {
     labelComponents: labelComponents,
     extractComponent: extractComponent,
@@ -539,6 +674,7 @@
     propagateLabelsToFullRes: propagateLabelsToFullRes,
     buildOpaqueMaskFromImageData: buildOpaqueMaskFromImageData,
     labelsFromElements: labelsFromElements,
+    matchComponentsToElements: matchComponentsToElements,
     createDefaultPalette: createDefaultPalette,
     createRandomPalette: createRandomPalette,
     collectLabelIds: collectLabelIds,

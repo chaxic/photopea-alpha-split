@@ -322,7 +322,7 @@ function panelHtml() {
       <footer class="panel-footer">
         <div class="panel-footer-copy">
           <span>Tested with Photopea ${escapeHtml(META.testedPhotopea)} · scripting v${escapeHtml(META.scriptingVersion)}</span>
-          <span>Assemble places Smart Objects in one group · data restores on Preview</span>
+          <span>Assemble imports all then positions · data restores on Preview</span>
         </div>
         <a href="${META.repositoryUrl}" target="_blank" rel="noreferrer" title="View the Alpha Split source code on GitHub">
           View source <span aria-hidden="true">↗</span>
@@ -822,8 +822,8 @@ function makeAssembleEnsureGroupScript({ requestId, groupName }) {
 }());`;
 }
 
-function makeAssembleOpenScript({ requestId, layer }) {
-  const payload = JSON.stringify({ requestId, layer });
+function makeAssembleOpenScript({ requestId, dataUrl }) {
+  const payload = JSON.stringify({ requestId, dataUrl });
   return `
 (function () {
   var settings = ${payload};
@@ -832,8 +832,7 @@ function makeAssembleOpenScript({ requestId, layer }) {
     if (!app.documents || app.documents.length === 0) {
       throw new Error("The source document is no longer open.");
     }
-    // Place only — rename/move/translate happen after Photopea finishes loading.
-    app.open(settings.layer.dataUrl, null, true);
+    app.open(settings.dataUrl, null, true);
   } catch (error) {
     send("assemble", {
       ok: false,
@@ -843,23 +842,56 @@ function makeAssembleOpenScript({ requestId, layer }) {
 }());`;
 }
 
-function makeAssembleFinishScript({
+function makeAssembleCaptureScript({ requestId, index, total, name }) {
+  const payload = JSON.stringify({ requestId, index, total, name });
+  return `
+(function () {
+  var settings = ${payload};
+  ${commonHelpers()}
+  try {
+    if (!app.documents || app.documents.length === 0) {
+      throw new Error("The source document is no longer open.");
+    }
+    var resultLayer = app.activeDocument.activeLayer;
+    if (!resultLayer) {
+      throw new Error("Photopea did not insert layer " + settings.name + ".");
+    }
+    if (resultLayer.typename === "LayerSet") {
+      send("assemble-placed", {
+        ok: false,
+        notReady: true,
+        message: "Smart Object is not ready yet."
+      });
+      return;
+    }
+    try { resultLayer.name = settings.name; } catch (_) {}
+    send("assemble-placed", {
+      ok: true,
+      index: settings.index,
+      total: settings.total,
+      name: settings.name,
+      layerId: layerId(resultLayer)
+    });
+  } catch (error) {
+    send("assemble", {
+      ok: false,
+      message: error && error.message ? error.message : String(error)
+    });
+  }
+}());`;
+}
+
+function makeAssembleBatchFinishScript({
   requestId,
-  layer,
-  index,
-  total,
   groupId,
   groupName,
-  isLast,
+  placements,
 }) {
   const payload = JSON.stringify({
     requestId,
-    layer,
-    index,
-    total,
     groupId,
     groupName,
-    isLast,
+    placements,
   });
   return `
 (function () {
@@ -870,21 +902,6 @@ function makeAssembleFinishScript({
       throw new Error("The source document is no longer open.");
     }
     var documentRef = app.activeDocument;
-    var resultLayer = documentRef.activeLayer;
-    if (!resultLayer) {
-      throw new Error("Photopea did not insert layer " + settings.layer.name + ".");
-    }
-    if (resultLayer.typename === "LayerSet") {
-      send("assemble-progress", {
-        ok: false,
-        notReady: true,
-        message: "Smart Object is not ready yet."
-      });
-      return;
-    }
-
-    resultLayer.name = settings.layer.name;
-
     var group = null;
     if (settings.groupId != null && settings.groupId >= 0) {
       group = findLayerById(documentRef, settings.groupId);
@@ -901,23 +918,32 @@ function makeAssembleFinishScript({
       throw new Error("Assemble group “" + settings.groupName + "” is missing.");
     }
 
-    try { resultLayer.move(group, ElementPlacement.INSIDE); }
-    catch (_) {
-      try { resultLayer.move(group, ElementPlacement.PLACEATBEGINNING); } catch (__) {}
+    var placed = 0;
+    var list = settings.placements || [];
+    for (var i = 0; i < list.length; i++) {
+      var item = list[i];
+      var resultLayer = findLayerById(documentRef, item.layerId);
+      if (!resultLayer || resultLayer.typename === "LayerSet") continue;
+      try { resultLayer.name = item.name; } catch (_) {}
+      try { resultLayer.move(group, ElementPlacement.INSIDE); }
+      catch (_) {
+        try { resultLayer.move(group, ElementPlacement.PLACEATBEGINNING); } catch (__) {}
+      }
+      try {
+        var bounds = resultLayer.bounds;
+        var dx = item.x - px(bounds[0]);
+        var dy = item.y - px(bounds[1]);
+        if (dx !== 0 || dy !== 0) resultLayer.translate(dx, dy);
+      } catch (_) {}
+      try { resultLayer.visible = true; } catch (_) {}
+      placed += 1;
     }
 
-    var bounds = resultLayer.bounds;
-    var dx = settings.layer.x - px(bounds[0]);
-    var dy = settings.layer.y - px(bounds[1]);
-    if (dx !== 0 || dy !== 0) resultLayer.translate(dx, dy);
-
-    resultLayer.visible = true;
-    send("assemble-progress", {
+    send("assemble-batch", {
       ok: true,
-      index: settings.index,
-      total: settings.total,
-      name: settings.layer.name,
-      done: !!settings.isLast
+      placed: placed,
+      total: list.length,
+      done: true
     });
   } catch (error) {
     send("assemble", {
@@ -1658,45 +1684,17 @@ async function placeNextAssembleLayer(requestId) {
   if (!job || state.activeRequestId !== requestId) return;
 
   if (job.index >= job.layers.length) {
-    clearActiveRequest();
-    state.stage = "complete";
-    state.statusKind = "ok";
-    state.statusText = `Assembled ${job.layers.length} Smart Object${job.layers.length === 1 ? "" : "s"} in “${job.groupName}”.`;
-    state._assembleJob = null;
-    render();
+    runAssembleBatchFinish(requestId);
     return;
   }
 
   const layer = job.layers[job.index];
   job.phase = "placing";
-  job.finishRetries = 0;
+  job.captureRetries = 0;
+  job.awaitingOpenDone = true;
   setWorking(
     "placing",
-    `Assembling ${job.index + 1} / ${job.layers.length}: ${layer.name}`,
-    requestId,
-    "assemble",
-    job.timeoutMs,
-  );
-  render();
-
-  try {
-    postScript(makeAssembleOpenScript({ requestId, layer }));
-  } catch (error) {
-    failActiveRequest(error && error.message ? error.message : String(error));
-  }
-}
-
-function finishAssembleLayer(requestId) {
-  const job = state._assembleJob;
-  if (!job || state.activeRequestId !== requestId) return;
-  if (job.index >= job.layers.length) return;
-
-  const layer = job.layers[job.index];
-  const isLast = job.index === job.layers.length - 1;
-  job.phase = "finishing";
-  setWorking(
-    "finishing",
-    `Positioning ${job.index + 1} / ${job.layers.length}: ${layer.name}`,
+    `Importing ${job.index + 1} / ${job.layers.length}: ${layer.name}`,
     requestId,
     "assemble",
     job.timeoutMs,
@@ -1705,19 +1703,93 @@ function finishAssembleLayer(requestId) {
 
   try {
     postScript(
-      makeAssembleFinishScript({
+      makeAssembleOpenScript({ requestId, dataUrl: layer.dataUrl }),
+    );
+  } catch (error) {
+    job.awaitingOpenDone = false;
+    failActiveRequest(error && error.message ? error.message : String(error));
+  }
+}
+
+function captureAssembleLayer(requestId) {
+  const job = state._assembleJob;
+  if (!job || state.activeRequestId !== requestId) return;
+  if (job.index >= job.layers.length) return;
+
+  const layer = job.layers[job.index];
+  job.phase = "capturing";
+  setWorking(
+    "capturing",
+    `Recording ${job.index + 1} / ${job.layers.length}: ${layer.name}`,
+    requestId,
+    "assemble",
+    job.timeoutMs,
+  );
+  render();
+
+  try {
+    postScript(
+      makeAssembleCaptureScript({
         requestId,
-        layer,
         index: job.index,
         total: job.layers.length,
-        groupId: job.groupId,
-        groupName: job.groupName,
-        isLast,
+        name: layer.name,
       }),
     );
   } catch (error) {
     failActiveRequest(error && error.message ? error.message : String(error));
   }
+}
+
+function runAssembleBatchFinish(requestId) {
+  const job = state._assembleJob;
+  if (!job || state.activeRequestId !== requestId) return;
+
+  if (!job.placements || !job.placements.length) {
+    failActiveRequest("No Smart Objects were imported to position.");
+    return;
+  }
+
+  job.phase = "batching";
+  job.batchDone = false;
+  setWorking(
+    "batching",
+    `Positioning ${job.placements.length} Smart Object${job.placements.length === 1 ? "" : "s"} in “${job.groupName}”…`,
+    requestId,
+    "assemble",
+    job.timeoutMs,
+  );
+  render();
+
+  try {
+    postScript(
+      makeAssembleBatchFinishScript({
+        requestId,
+        groupId: job.groupId,
+        groupName: job.groupName,
+        placements: job.placements,
+      }),
+    );
+  } catch (error) {
+    failActiveRequest(error && error.message ? error.message : String(error));
+  }
+}
+
+function completeAssembleJob(placedCount) {
+  const job = state._assembleJob;
+  const groupName = (job && job.groupName) || "elements";
+  const total = (job && job.layers && job.layers.length) || placedCount;
+  clearActiveRequest();
+  state.stage = "complete";
+  state.statusKind = "ok";
+  state.statusText = `Assembled ${placedCount || total} Smart Object${(placedCount || total) === 1 ? "" : "s"} in “${groupName}”.`;
+  state._assembleJob = null;
+  render();
+}
+
+function finishAssembleLayer(requestId) {
+  // Legacy name kept for any stray callers; capture is the post-open step now.
+  captureAssembleLayer(requestId);
 }
 
 async function beginAssemble() {
@@ -1809,7 +1881,10 @@ async function beginAssemble() {
       groupId: null,
       timeoutMs,
       phase: "ensure",
-      finishRetries: 0,
+      captureRetries: 0,
+      placements: [],
+      batchDone: false,
+      awaitingOpenDone: false,
     };
 
     setWorking(
@@ -1901,31 +1976,46 @@ async function finishScanAnalysis(requestId, pngBuffer, meta) {
     const decoded = await decodePng(pngBuffer, META.previewMaxSide || 2048);
     if (state.activeRequestId !== requestId) return;
 
-    const opaque = CORE.buildOpaqueMaskFromImageData(
+    setWorking(
+      "processing",
+      decoded.scale < 0.999
+        ? `Detecting regions at ${decoded.imageData.width}×${decoded.imageData.height} (from ${decoded.fullWidth}×${decoded.fullHeight})…`
+        : `Detecting separate alpha regions at ${decoded.fullWidth}×${decoded.fullHeight}…`,
+      requestId,
+      "scan",
+      timeoutMs,
+    );
+    render();
+    await yieldToUi();
+
+    const labeled = CORE.labelComponents(
       decoded.imageData,
       settings.alphaThreshold,
+      settings.minSize,
+      settings.eightConnected,
     );
+
+    let labels = labeled.labels;
+    let components = labeled.components;
+    let restored = false;
+
     const stored = pickStoredSplitData(
       meta,
       decoded.fullWidth,
       decoded.fullHeight,
     );
-
-    let labels;
-    let components;
-    let restored = false;
-
-    if (stored) {
-      const painted = CORE.labelsFromElements(
+    if (stored && labeled.components.length) {
+      const matched = CORE.matchComponentsToElements(
+        labeled.labels,
+        labeled.components,
+        stored.elements,
         decoded.imageData.width,
         decoded.imageData.height,
-        opaque,
-        stored.elements,
         Number(stored.document && stored.document.width) || decoded.fullWidth,
         Number(stored.document && stored.document.height) || decoded.fullHeight,
       );
-      if (painted.assigned > 0) {
-        labels = painted.labels;
+      if (matched.matched > 0) {
+        labels = matched.labels;
         components = CORE.buildComponentsFromLabels(
           labels,
           decoded.imageData.width,
@@ -1934,17 +2024,6 @@ async function finishScanAnalysis(requestId, pngBuffer, meta) {
         );
         restored = components.length > 0;
       }
-    }
-
-    if (!restored) {
-      const labeled = CORE.labelComponents(
-        decoded.imageData,
-        settings.alphaThreshold,
-        settings.minSize,
-        settings.eightConnected,
-      );
-      labels = labeled.labels;
-      components = labeled.components;
     }
 
     const labelIds = components.map((component) => component.id);
@@ -2155,7 +2234,12 @@ function beginScan() {
   state.pendingDone = false;
   state._scanMeta = null;
   state.expectBinary = true;
-  setWorking("receiving snapshot", "Reading layer and snapshotting the document…", requestId, "scan");
+  setWorking(
+    "receiving snapshot",
+    "Snapshotting the document (large files take a while)…",
+    requestId,
+    "scan",
+  );
   render();
 
   try {
@@ -2360,7 +2444,7 @@ function prepareTemporaryExport(requestId) {
 
   setWorking(
     "receiving file",
-    "Exporting the isolated active layer…",
+    "Exporting the isolated active layer as PNG…",
     requestId,
     "scan",
   );
@@ -2389,7 +2473,12 @@ function closeTemporaryAndAnalyze(requestId, pngBuffer) {
   state.expectBinary = false;
   state._pendingPng = pngBuffer;
 
-  setWorking("cleaning up", "Closing the temporary copy…", requestId, "scan");
+  setWorking(
+    "cleaning up",
+    "Closing the temporary copy and restoring the workfile…",
+    requestId,
+    "scan",
+  );
   render();
 
   try {
@@ -2411,17 +2500,30 @@ function handleDone() {
 
   if (state.activeOperation === "assemble") {
     const job = state._assembleJob;
-    if (job && state.stage === "placing" && job.phase === "placing") {
-      // Give Photopea a beat to finish inserting the Smart Object after open.
+    if (!job) return;
+
+    if (state.stage === "placing" && job.phase === "placing" && job.awaitingOpenDone) {
+      // Open script finished; give Photopea a beat, then capture the new layer id.
+      job.awaitingOpenDone = false;
+      const indexAtOpen = job.index;
       window.setTimeout(() => {
         if (
           state.activeRequestId &&
           state.activeOperation === "assemble" &&
-          state.stage === "placing"
+          state._assembleJob &&
+          state._assembleJob.index === indexAtOpen &&
+          (state.stage === "placing" || state.stage === "capturing")
         ) {
-          finishAssembleLayer(state.activeRequestId);
+          captureAssembleLayer(state.activeRequestId);
         }
       }, 120);
+      return;
+    }
+
+    if (state.stage === "batching" && job.phase === "batching" && !job.batchDone) {
+      // Backup if assemble-batch echo was dropped.
+      job.batchDone = true;
+      completeAssembleJob(job.placements.length);
     }
     return;
   }
@@ -2505,12 +2607,12 @@ function handleTaggedMessage(payload) {
     return;
   }
 
-  if (payload.type === "assemble-progress") {
+  if (payload.type === "assemble-placed") {
+    const job = state._assembleJob;
+    if (!job) return;
     if (payload.notReady) {
-      const job = state._assembleJob;
-      if (!job) return;
-      job.finishRetries = (job.finishRetries || 0) + 1;
-      if (job.finishRetries > 8) {
+      job.captureRetries = (job.captureRetries || 0) + 1;
+      if (job.captureRetries > 8) {
         failActiveRequest(
           payload.message || "Smart Object did not finish loading in time.",
         );
@@ -2521,27 +2623,71 @@ function handleTaggedMessage(payload) {
           state.activeRequestId === payload.requestId &&
           state.activeOperation === "assemble"
         ) {
-          finishAssembleLayer(payload.requestId);
+          captureAssembleLayer(payload.requestId);
         }
-      }, 150 + job.finishRetries * 50);
+      }, 150 + job.captureRetries * 50);
+      return;
+    }
+    if (!payload.ok) {
+      failActiveRequest(payload.message || "Could not record a placed layer.");
+      return;
+    }
+    const source = job.layers[payload.index];
+    if (!source) {
+      failActiveRequest("Assemble lost track of the imported layer list.");
+      return;
+    }
+    job.placements.push({
+      layerId: payload.layerId,
+      name: source.name,
+      x: source.x,
+      y: source.y,
+    });
+    // Drop the heavy dataUrl once placed so memory stays reasonable.
+    source.dataUrl = null;
+    job.index = payload.index + 1;
+    placeNextAssembleLayer(payload.requestId);
+    return;
+  }
+
+  if (payload.type === "assemble-batch") {
+    if (!payload.ok) {
+      failActiveRequest(payload.message || "Could not position assembled layers.");
+      return;
+    }
+    const job = state._assembleJob;
+    if (job && job.batchDone) return;
+    if (job) job.batchDone = true;
+    completeAssembleJob(payload.placed || (job && job.placements.length) || 0);
+    return;
+  }
+
+  if (payload.type === "assemble-progress") {
+    // Older progress messages — treat success as batch complete / notReady as capture retry.
+    if (payload.notReady) {
+      const job = state._assembleJob;
+      if (!job) return;
+      job.captureRetries = (job.captureRetries || 0) + 1;
+      if (job.captureRetries > 8) {
+        failActiveRequest(
+          payload.message || "Smart Object did not finish loading in time.",
+        );
+        return;
+      }
+      window.setTimeout(() => {
+        if (
+          state.activeRequestId === payload.requestId &&
+          state.activeOperation === "assemble"
+        ) {
+          captureAssembleLayer(payload.requestId);
+        }
+      }, 150 + job.captureRetries * 50);
       return;
     }
     if (!payload.ok) {
       failActiveRequest(payload.message || "Could not assemble a layer.");
       return;
     }
-    if (!state._assembleJob) return;
-    state._assembleJob.index = payload.index + 1;
-    if (payload.done) {
-      clearActiveRequest();
-      state.stage = "complete";
-      state.statusKind = "ok";
-      state.statusText = `Assembled ${payload.total} Smart Object${payload.total === 1 ? "" : "s"} in “${state._assembleJob.groupName}”.`;
-      state._assembleJob = null;
-      render();
-      return;
-    }
-    placeNextAssembleLayer(payload.requestId);
     return;
   }
 
