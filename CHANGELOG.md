@@ -2,6 +2,12 @@
 
 All notable changes to Alpha Split for Photopea are documented here.
 
+## [1.2.2] - 2026-07-27
+
+### Fixed
+
+- Preview label colours are now solid and opaque instead of a 50% tint over the artwork.
+
 ## [1.2.1] - 2026-07-27
 
 ### Fixed

@@ -981,10 +981,11 @@ function drawPreview(scan) {
         continue;
       }
       const color = (colors && colors.get(id)) || [76, 139, 245];
-      dst[dstOffset] = (src[srcOffset] + color[0]) >> 1;
-      dst[dstOffset + 1] = (src[srcOffset + 1] + color[1]) >> 1;
-      dst[dstOffset + 2] = (src[srcOffset + 2] + color[2]) >> 1;
-      dst[dstOffset + 3] = Math.max(src[srcOffset + 3], 180);
+      const alpha = src[srcOffset + 3];
+      dst[dstOffset] = color[0];
+      dst[dstOffset + 1] = color[1];
+      dst[dstOffset + 2] = color[2];
+      dst[dstOffset + 3] = alpha;
     }
   }
 
