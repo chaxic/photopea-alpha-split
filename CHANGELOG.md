@@ -2,6 +2,13 @@
 
 All notable changes to Alpha Split for Photopea are documented here.
 
+## [1.2.4] - 2026-07-27
+
+### Fixed
+
+- Sidebar icon brightness now matches other Photopea plugins by using black
+  strokes so Photopea can tint them for the dark UI.
+
 ## [1.2.3] - 2026-07-27
 
 ### Changed
