@@ -581,12 +581,22 @@ function makePlaceLayerScript({
       throw new Error("Photopea did not insert layer " + settings.layer.name + ".");
     }
     resultLayer.name = settings.layer.name;
+
     if (group) {
       try { resultLayer.move(group, ElementPlacement.INSIDE); }
       catch (_) {
         try { resultLayer.move(group, ElementPlacement.PLACEATBEGINNING); } catch (__) {}
       }
     }
+
+    // Crops are placed as small smart objects — move them to the original bbox origin.
+    try {
+      var bounds = resultLayer.bounds;
+      var dx = settings.layer.x - px(bounds[0]);
+      var dy = settings.layer.y - px(bounds[1]);
+      if (dx !== 0 || dy !== 0) resultLayer.translate(dx, dy);
+    } catch (translateError) {}
+
     resultLayer.visible = true;
 
     if (settings.isLast && settings.hideSource) {
@@ -648,10 +658,14 @@ function drawPreview(scan) {
   const canvas = document.querySelector("#preview-canvas");
   if (!canvas || !scan || !scan.imageData) return;
   const { width, height, labels, imageData } = scan;
-  canvas.width = width;
-  canvas.height = height;
+  const maxSide = 512;
+  const scale = Math.min(1, maxSide / Math.max(width, height));
+  const dw = Math.max(1, Math.round(width * scale));
+  const dh = Math.max(1, Math.round(height * scale));
+  canvas.width = dw;
+  canvas.height = dh;
   const ctx = canvas.getContext("2d");
-  const out = ctx.createImageData(width, height);
+  const out = ctx.createImageData(dw, dh);
   const src = imageData.data;
   const dst = out.data;
   const palette = [
@@ -665,24 +679,36 @@ function drawPreview(scan) {
     [140, 160, 220],
   ];
 
-  for (let i = 0; i < labels.length; i++) {
-    const offset = i << 2;
-    const id = labels[i];
-    if (!id) {
-      dst[offset] = src[offset];
-      dst[offset + 1] = src[offset + 1];
-      dst[offset + 2] = src[offset + 2];
-      dst[offset + 3] = Math.min(src[offset + 3], 60);
-      continue;
+  for (let py = 0; py < dh; py++) {
+    const srcY = Math.min(height - 1, Math.floor(py / scale));
+    for (let pxCol = 0; pxCol < dw; pxCol++) {
+      const srcX = Math.min(width - 1, Math.floor(pxCol / scale));
+      const srcIndex = srcY * width + srcX;
+      const srcOffset = srcIndex << 2;
+      const dstOffset = (py * dw + pxCol) << 2;
+      const id = labels[srcIndex];
+      if (!id) {
+        dst[dstOffset] = src[srcOffset];
+        dst[dstOffset + 1] = src[srcOffset + 1];
+        dst[dstOffset + 2] = src[srcOffset + 2];
+        dst[dstOffset + 3] = Math.min(src[srcOffset + 3], 60);
+        continue;
+      }
+      const color = palette[(id - 1) % palette.length];
+      dst[dstOffset] = (src[srcOffset] + color[0]) >> 1;
+      dst[dstOffset + 1] = (src[srcOffset + 1] + color[1]) >> 1;
+      dst[dstOffset + 2] = (src[srcOffset + 2] + color[2]) >> 1;
+      dst[dstOffset + 3] = Math.max(src[srcOffset + 3], 180);
     }
-    const color = palette[(id - 1) % palette.length];
-    dst[offset] = (src[offset] + color[0]) >> 1;
-    dst[offset + 1] = (src[offset + 1] + color[1]) >> 1;
-    dst[offset + 2] = (src[offset + 2] + color[2]) >> 1;
-    dst[offset + 3] = Math.max(src[offset + 3], 180);
   }
 
   ctx.putImageData(out, 0, 0);
+}
+
+function yieldToUi() {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, 0);
+  });
 }
 
 async function finishScanAnalysis(requestId, pngBuffer, meta) {
@@ -851,19 +877,25 @@ async function beginSplit() {
       const name = `${settings.prefix}_${padNumber(component.id, 2)}`;
       setWorking(
         "preparing",
-        `Encoding layer ${index + 1} / ${state.scan.components.length}: ${name}`,
+        `Encoding crop ${index + 1} / ${state.scan.components.length}: ${name}`,
         requestId,
         "split",
       );
       render();
 
-      const slice = CORE.extractComponent(
+      const crop = CORE.extractComponentCrop(
         state.scan.imageData,
         state.scan.labels,
-        component.id,
+        component,
       );
-      const dataUrl = await imageDataToDataUrl(slice);
-      layers.push({ name, dataUrl });
+      const dataUrl = await imageDataToDataUrl(crop.imageData);
+      layers.push({
+        name,
+        dataUrl,
+        x: crop.x,
+        y: crop.y,
+      });
+      await yieldToUi();
     }
 
     if (state.activeRequestId !== requestId) return;

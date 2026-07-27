@@ -62,6 +62,27 @@ test("attached shadow stays one element", () => {
   assert.equal(core.labelComponents(image, 8, 4, true).components.length, 1);
 });
 
+test("extractComponentCrop keeps only the bbox and origin", () => {
+  const image = makeImageData(20, 20, [
+    [2, 3, 5, 6],
+    [12, 12, 14, 14],
+  ]);
+  const labeled = core.labelComponents(image, 8, 1, true);
+  const first = labeled.components[0];
+  const crop = core.extractComponentCrop(image, labeled.labels, first);
+  assert.equal(crop.x, first.minX);
+  assert.equal(crop.y, first.minY);
+  assert.equal(crop.width, first.maxX - first.minX + 1);
+  assert.equal(crop.height, first.maxY - first.minY + 1);
+  assert.equal(crop.imageData.width, crop.width);
+  assert.equal(crop.imageData.height, crop.height);
+  let opaque = 0;
+  for (let i = 3; i < crop.imageData.data.length; i += 4) {
+    if (crop.imageData.data[i] > 0) opaque += 1;
+  }
+  assert.equal(opaque, first.size);
+});
+
 test("validateSettings rejects bad thresholds", () => {
   assert.equal(core.validateSettings({ alphaThreshold: 0, minSize: 1, prefix: "e" }).ok, false);
   assert.equal(core.validateSettings({ alphaThreshold: 8, minSize: 0, prefix: "e" }).ok, false);

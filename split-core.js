@@ -139,6 +139,44 @@
     return out;
   }
 
+  /**
+   * Extract only the component's bounding box — much faster for large documents.
+   * Returns { imageData, x, y, width, height }.
+   */
+  function extractComponentCrop(imageData, labels, component) {
+    var fullWidth = imageData.width;
+    var src = imageData.data;
+    var x0 = component.minX;
+    var y0 = component.minY;
+    var width = component.maxX - component.minX + 1;
+    var height = component.maxY - component.minY + 1;
+    var out = new ImageData(width, height);
+    var dst = out.data;
+    var y;
+    var x;
+
+    for (y = 0; y < height; y++) {
+      for (x = 0; x < width; x++) {
+        var srcIndex = (y0 + y) * fullWidth + (x0 + x);
+        if (labels[srcIndex] !== component.id) continue;
+        var srcOffset = srcIndex << 2;
+        var dstOffset = (y * width + x) << 2;
+        dst[dstOffset] = src[srcOffset];
+        dst[dstOffset + 1] = src[srcOffset + 1];
+        dst[dstOffset + 2] = src[srcOffset + 2];
+        dst[dstOffset + 3] = src[srcOffset + 3];
+      }
+    }
+
+    return {
+      imageData: out,
+      x: x0,
+      y: y0,
+      width: width,
+      height: height,
+    };
+  }
+
   function validateSettings(settings) {
     var alpha = Number(settings.alphaThreshold);
     var minSize = Number(settings.minSize);
@@ -157,6 +195,7 @@
   return {
     labelComponents: labelComponents,
     extractComponent: extractComponent,
+    extractComponentCrop: extractComponentCrop,
     validateSettings: validateSettings,
   };
 }));

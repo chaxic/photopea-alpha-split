@@ -2,6 +2,20 @@
 
 All notable changes to Alpha Split for Photopea are documented here.
 
+## [1.0.2] - 2026-07-27
+
+### Fixed
+
+- Split was extremely slow on large documents because each element was encoded
+  as a full-document PNG (for example 8192×8192). Elements are now cropped to
+  their bounding boxes and positioned after placement.
+- Preview rendering no longer builds a full-resolution canvas; it downscales to
+  at most 512px on the long side.
+
+### Verification
+
+- Automated checks passed on 27 July 2026.
+
 ## [1.0.1] - 2026-07-27
 
 ### Fixed
