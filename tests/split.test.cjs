@@ -8,6 +8,7 @@ const path = require("node:path");
 const core = require("../split-core.js");
 const meta = require("../meta.js");
 const zip = require("../zip-util.js");
+const data = require("../data-util.js");
 
 function makeImageData(width, height, rects) {
   const data = new Uint8ClampedArray(width * height * 4);
@@ -133,13 +134,59 @@ test("stored ZIP starts with a local file header", async () => {
 test("installer page loads zip-util and export wording", () => {
   const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
   assert.match(html, /zip-util\.js\?v=/);
+  assert.match(html, /data-util\.js\?v=/);
   const app = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
   assert.match(app, /Export elements/);
+  assert.match(app, /Assemble Elements/);
+  assert.match(app, /alpha-split-data\.json/);
+  assert.match(app, /AlphaSplit Data/);
   assert.doesNotMatch(app, /Split into layers/);
   assert.doesNotMatch(app, /makePlaceLayerScript/);
   assert.match(app, /Randomize colors/);
   assert.match(app, /labelsEdited/);
   assert.match(app, /propagateLabelsToFullRes/);
+});
+
+test("buildSplitData creates sequential filenames and bboxes", () => {
+  const built = data.buildSplitData({
+    settings: {
+      alphaThreshold: 8,
+      minSize: 32,
+      prefix: "element",
+      eightConnected: true,
+    },
+    components: [
+      { id: 3, minX: 10, minY: 20, maxX: 19, maxY: 29 },
+      { id: 7, minX: 40, minY: 50, maxX: 45, maxY: 55 },
+    ],
+    meta: { documentName: "sheet.psd", layerId: 9, layerName: "Sheet" },
+    width: 100,
+    height: 200,
+    pluginVersion: "1.3.0",
+    exported: true,
+  });
+  assert.equal(built.version, 1);
+  assert.equal(built.plugin, "alpha-split");
+  assert.equal(built.elements.length, 2);
+  assert.equal(built.elements[0].filename, "element_01.png");
+  assert.equal(built.elements[0].x, 10);
+  assert.equal(built.elements[0].width, 10);
+  assert.equal(built.elements[1].filename, "element_02.png");
+  assert.equal(data.validateSplitData(built).ok, true);
+});
+
+test("validateSplitData rejects bad payloads", () => {
+  assert.equal(data.validateSplitData(null).ok, false);
+  assert.equal(data.validateSplitData({ version: 2, plugin: "alpha-split" }).ok, false);
+  assert.equal(
+    data.validateSplitData({
+      version: 1,
+      plugin: "alpha-split",
+      settings: {},
+      elements: [{ filename: "a.png" }],
+    }).ok,
+    false,
+  );
 });
 
 test("floodIsland respects 4 vs 8 connectivity", () => {

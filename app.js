@@ -3,6 +3,7 @@
 const META = window.ALPHA_SPLIT_META;
 const CORE = window.AlphaSplitCore;
 const ZIP = window.AlphaSplitZip;
+const DATA = window.AlphaSplitData;
 const RESULT_PREFIX = "ALPHA_SPLIT_RESULT::";
 const MESSAGE_PREFIX = "ALPHA_SPLIT::";
 const READY_MESSAGE = "ALPHA_SPLIT_DIRECTORY_READY";
@@ -12,7 +13,7 @@ const DB_VERSION = 1;
 const STORE_NAME = "handles";
 const DIRECTORY_KEY = "export-directory";
 
-if (!META || !CORE || !ZIP) {
+if (!META || !CORE || !ZIP || !DATA) {
   const root = document.querySelector("#app");
   if (root) {
     root.textContent =
@@ -31,7 +32,9 @@ const state = {
   folderHandle: null,
   folderName: "",
   folderPermission: "none",
+  folderData: null,
   exportAfterFolderChoice: false,
+  assembleAfterFolderChoice: false,
   pickerWindow: null,
   editTool: "sample",
   sampledLabel: null,
@@ -222,6 +225,14 @@ function panelHtml() {
     settingsMatch &&
     !(state.scan.labelsEdited && !state.scan.labelsCommitted);
   const exportDisabled = canExport ? "" : " disabled";
+  const canAssemble =
+    !busy &&
+    state.destination === "folder" &&
+    state.folderPermission === "granted" &&
+    state.folderData &&
+    state.folderData.elements &&
+    state.folderData.elements.length > 0;
+  const assembleDisabled = canAssemble ? "" : " disabled";
   const count = state.scan ? state.scan.components.length : 0;
 
   return `
@@ -299,13 +310,16 @@ function panelHtml() {
             <button class="secondary" type="button" data-run="scan"${disabled}>Preview</button>
             <button class="primary" type="button" data-run="export"${exportDisabled}>Export elements</button>
           </div>
+          <div class="action-row action-row-single">
+            <button class="secondary" type="button" data-run="assemble"${assembleDisabled}>Assemble Elements</button>
+          </div>
         </div>
       </div>
 
       <footer class="panel-footer">
         <div class="panel-footer-copy">
           <span>Tested with Photopea ${escapeHtml(META.testedPhotopea)} · scripting v${escapeHtml(META.scriptingVersion)}</span>
-          <span>Preview edits are local until Update · Export writes PNG files</span>
+          <span>Assemble places Smart Objects · data saved to PSD + folder JSON</span>
         </div>
         <a href="${META.repositoryUrl}" target="_blank" rel="noreferrer" title="View the Alpha Split source code on GitHub">
           View source <span aria-hidden="true">↗</span>
@@ -336,6 +350,7 @@ function installerHtml() {
           <span>Connected components</span>
           <span>Safe preview</span>
           <span>Folder or ZIP</span>
+          <span>Assemble</span>
         </div>
         <div class="install-actions">
           <button class="download-button" id="download-plugin" type="button">
@@ -413,6 +428,16 @@ function clearActiveRequest() {
 }
 
 function failActiveRequest(message) {
+  if (state._dataLayerWait) {
+    const wait = state._dataLayerWait;
+    state._dataLayerWait = null;
+    wait.reject(new Error(message));
+  }
+  if (state._dataLayerReadWait) {
+    const wait = state._dataLayerReadWait;
+    state._dataLayerReadWait = null;
+    wait.resolve(null);
+  }
   clearActiveRequest();
   state.stage = "error";
   state.statusKind = "error";
@@ -494,6 +519,17 @@ function commonHelpers() {
       if (group.name === wantedName) return group;
       var nested = findLayerSetByName(group, wantedName);
       if (nested) return nested;
+    }
+    return null;
+  }
+  function findArtLayerByName(container, wantedName) {
+    for (var i = 0; i < container.layers.length; i++) {
+      var item = container.layers[i];
+      if (item.typename === "ArtLayer" && item.name === wantedName) return item;
+      if (item.typename === "LayerSet") {
+        var nested = findArtLayerByName(item, wantedName);
+        if (nested) return nested;
+      }
     }
     return null;
   }
@@ -672,6 +708,141 @@ function makeCloseTempScript({
     });
   } catch (error) {
     send("cleanup", {
+      ok: false,
+      message: error && error.message ? error.message : String(error)
+    });
+  }
+}());`;
+}
+
+function makeUpsertDataLayerScript({ requestId, jsonText }) {
+  const payload = JSON.stringify({
+    requestId,
+    layerName: DATA.DATA_LAYER_NAME,
+    jsonText,
+  });
+  return `
+(function () {
+  var settings = ${payload};
+  ${commonHelpers()}
+  try {
+    if (!app.documents || app.documents.length === 0) {
+      throw new Error("Open a document before saving Alpha Split data.");
+    }
+    var documentRef = app.activeDocument;
+    var layer = findArtLayerByName(documentRef, settings.layerName);
+    if (!layer) {
+      layer = documentRef.artLayers.add();
+      layer.kind = LayerKind.TEXT;
+      layer.name = settings.layerName;
+    }
+    try { layer.kind = LayerKind.TEXT; } catch (_) {}
+    try { layer.textItem.contents = settings.jsonText; } catch (textError) {
+      throw new Error("Could not write the Alpha Split data layer text.");
+    }
+    try { layer.visible = false; } catch (_) {}
+    send("data-layer", { ok: true, written: true });
+  } catch (error) {
+    send("data-layer", {
+      ok: false,
+      message: error && error.message ? error.message : String(error)
+    });
+  }
+}());`;
+}
+
+function makeReadDataLayerScript(requestId) {
+  const payload = JSON.stringify({
+    requestId,
+    layerName: DATA.DATA_LAYER_NAME,
+  });
+  return `
+(function () {
+  var settings = ${payload};
+  ${commonHelpers()}
+  try {
+    if (!app.documents || app.documents.length === 0) {
+      send("data-layer", { ok: true, found: false, jsonText: null });
+      return;
+    }
+    var documentRef = app.activeDocument;
+    var layer = findArtLayerByName(documentRef, settings.layerName);
+    if (!layer) {
+      send("data-layer", { ok: true, found: false, jsonText: null });
+      return;
+    }
+    var text = "";
+    try { text = String(layer.textItem.contents || ""); } catch (_) { text = ""; }
+    send("data-layer", { ok: true, found: true, jsonText: text });
+  } catch (error) {
+    send("data-layer", {
+      ok: false,
+      message: error && error.message ? error.message : String(error)
+    });
+  }
+}());`;
+}
+
+function makeAssemblePlaceScript({
+  requestId,
+  layer,
+  index,
+  total,
+  groupName,
+  isLast,
+}) {
+  const payload = JSON.stringify({
+    requestId,
+    layer,
+    index,
+    total,
+    groupName,
+    isLast,
+  });
+  return `
+(function () {
+  var settings = ${payload};
+  ${commonHelpers()}
+  try {
+    if (!app.documents || app.documents.length === 0) {
+      throw new Error("The source document is no longer open.");
+    }
+    var documentRef = app.activeDocument;
+    var group = findLayerSetByName(documentRef, settings.groupName);
+    if (!group) {
+      group = documentRef.layerSets.add();
+      group.name = settings.groupName;
+    }
+
+    app.open(settings.layer.dataUrl, null, true);
+    var resultLayer = documentRef.activeLayer;
+    if (!resultLayer) {
+      throw new Error("Photopea did not insert layer " + settings.layer.name + ".");
+    }
+    resultLayer.name = settings.layer.name;
+
+    try { resultLayer.move(group, ElementPlacement.INSIDE); }
+    catch (_) {
+      try { resultLayer.move(group, ElementPlacement.PLACEATBEGINNING); } catch (__) {}
+    }
+
+    try {
+      var bounds = resultLayer.bounds;
+      var dx = settings.layer.x - px(bounds[0]);
+      var dy = settings.layer.y - px(bounds[1]);
+      if (dx !== 0 || dy !== 0) resultLayer.translate(dx, dy);
+    } catch (translateError) {}
+
+    resultLayer.visible = true;
+    send("assemble-progress", {
+      ok: true,
+      index: settings.index,
+      total: settings.total,
+      name: settings.layer.name,
+      done: !!settings.isLast
+    });
+  } catch (error) {
+    send("assemble", {
       ok: false,
       message: error && error.message ? error.message : String(error)
     });
@@ -1262,9 +1433,274 @@ function commitPreviewEdits() {
   if (statusBox) {
     statusBox.className = `status status-${state.statusKind}`;
   }
-  // Re-enable Export without full render when possible.
   const exportBtn = document.querySelector('[data-run="export"]');
   if (exportBtn) exportBtn.disabled = !components.length;
+
+  if (components.length && state.embedded) {
+    const data = DATA.buildSplitData({
+      settings,
+      components,
+      meta: state.scan.meta || {},
+      width: state.scan.width,
+      height: state.scan.height,
+      pluginVersion: META.version,
+      exported: false,
+    });
+    state.latestSplitData = data;
+    upsertDataLayer(data).catch(() => {
+      // Best-effort persistence.
+    });
+  }
+}
+
+function bytesToDataUrl(bytes, mimeType) {
+  let binary = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode.apply(
+      null,
+      bytes.subarray(i, Math.min(i + chunk, bytes.length)),
+    );
+  }
+  return `data:${mimeType};base64,${btoa(binary)}`;
+}
+
+function upsertDataLayer(data) {
+  return new Promise((resolve, reject) => {
+    if (!state.embedded) {
+      resolve(false);
+      return;
+    }
+    const requestId = createRequestId();
+    const jsonText = JSON.stringify(data, null, 2);
+    const previousKind = state.statusKind;
+    const previousText = state.statusText;
+    state._dataLayerWait = {
+      requestId,
+      resolve: (value) => {
+        state.statusKind = previousKind === "working" ? "ok" : previousKind;
+        state.statusText = previousText;
+        resolve(value);
+      },
+      reject,
+    };
+    setWorking(
+      "saving data",
+      "Saving Alpha Split data layer…",
+      requestId,
+      "data-layer",
+      30000,
+    );
+    try {
+      postScript(makeUpsertDataLayerScript({ requestId, jsonText }));
+    } catch (error) {
+      state._dataLayerWait = null;
+      clearActiveRequest();
+      reject(error);
+    }
+  });
+}
+
+function requestDataLayerRead() {
+  return new Promise((resolve) => {
+    if (!state.embedded) {
+      resolve(null);
+      return;
+    }
+    const requestId = createRequestId();
+    state._dataLayerReadWait = {
+      requestId,
+      resolve: (value) => {
+        resolve(value);
+      },
+    };
+    setWorking(
+      "reading data",
+      "Reading Alpha Split data layer…",
+      requestId,
+      "data-layer-read",
+      20000,
+    );
+    try {
+      postScript(makeReadDataLayerScript(requestId));
+    } catch {
+      state._dataLayerReadWait = null;
+      clearActiveRequest();
+      resolve(null);
+    }
+  });
+}
+
+function applyRestoredSettings(data, sourceLabel) {
+  const settings = DATA.applySettingsFromData(data);
+  if (!settings) return false;
+  state.alphaThreshold = settings.alphaThreshold;
+  state.minSize = settings.minSize;
+  state.prefix = settings.prefix;
+  state.eightConnected = settings.eightConnected;
+  state.latestSplitData = data;
+  if (sourceLabel === "folder") state.folderData = data;
+  state.statusKind = "ok";
+  state.statusText = `Restored Alpha Split settings from ${sourceLabel}.`;
+  return true;
+}
+
+async function readFolderSplitData() {
+  if (!state.folderHandle || state.folderPermission !== "granted") return null;
+  try {
+    const fileHandle = await state.folderHandle.getFileHandle(DATA.DATA_FILENAME);
+    const file = await fileHandle.getFile();
+    const text = await file.text();
+    const parsed = JSON.parse(text);
+    const validation = DATA.validateSplitData(parsed);
+    if (!validation.ok) return null;
+    state.folderData = parsed;
+    return parsed;
+  } catch {
+    state.folderData = null;
+    return null;
+  }
+}
+
+async function writeFolderSplitData(data) {
+  const text = JSON.stringify(data, null, 2);
+  const bytes = new TextEncoder().encode(text);
+  await writeFileToDirectory(DATA.DATA_FILENAME, bytes);
+  state.folderData = data;
+}
+
+async function placeNextAssembleLayer(requestId) {
+  const job = state._assembleJob;
+  if (!job || state.activeRequestId !== requestId) return;
+
+  if (job.index >= job.layers.length) {
+    clearActiveRequest();
+    state.stage = "complete";
+    state.statusKind = "ok";
+    state.statusText = `Assembled ${job.layers.length} Smart Object${job.layers.length === 1 ? "" : "s"}.`;
+    state._assembleJob = null;
+    render();
+    return;
+  }
+
+  const layer = job.layers[job.index];
+  const isLast = job.index === job.layers.length - 1;
+  setWorking(
+    "assembling",
+    `Assembling ${job.index + 1} / ${job.layers.length}: ${layer.name}`,
+    requestId,
+    "assemble",
+    job.timeoutMs,
+  );
+  render();
+
+  try {
+    postScript(
+      makeAssemblePlaceScript({
+        requestId,
+        layer,
+        index: job.index,
+        total: job.layers.length,
+        groupName: job.groupName,
+        isLast,
+      }),
+    );
+  } catch (error) {
+    failActiveRequest(error && error.message ? error.message : String(error));
+  }
+}
+
+async function beginAssemble() {
+  if (!state.embedded) {
+    state.statusKind = "idle";
+    state.statusText = "Install the plugin to use it inside Photopea.";
+    render();
+    return;
+  }
+  if (state.statusKind === "working") return;
+
+  if (state.destination !== "folder") {
+    state.statusKind = "error";
+    state.statusText = "Switch destination to Folder to assemble exported PNGs.";
+    render();
+    return;
+  }
+
+  const ready = await ensureFolderPermission();
+  if (!ready) {
+    state.assembleAfterFolderChoice = true;
+    return;
+  }
+
+  let data = state.folderData;
+  if (!data) data = await readFolderSplitData();
+  const validation = DATA.validateSplitData(data);
+  if (!validation.ok || !data.elements.length) {
+    state.statusKind = "error";
+    state.statusText =
+      "Export to a folder first (writes alpha-split-data.json).";
+    render();
+    return;
+  }
+
+  const requestId = createRequestId();
+  const timeoutMs = Math.min(
+    1200000,
+    Math.max(META.requestTimeoutMs || 180000, 60000 + data.elements.length * 8000),
+  );
+  setWorking(
+    "preparing",
+    "Reading exported PNGs for Assemble…",
+    requestId,
+    "assemble",
+    timeoutMs,
+  );
+  render();
+
+  try {
+    const layers = [];
+    for (let index = 0; index < data.elements.length; index++) {
+      if (state.activeRequestId !== requestId) return;
+      const element = data.elements[index];
+      setWorking(
+        "preparing",
+        `Loading ${index + 1} / ${data.elements.length}: ${element.filename}`,
+        requestId,
+        "assemble",
+        timeoutMs,
+      );
+      render();
+
+      let fileHandle;
+      try {
+        fileHandle = await state.folderHandle.getFileHandle(element.filename);
+      } catch {
+        throw new Error(`Missing exported file: ${element.filename}`);
+      }
+      const file = await fileHandle.getFile();
+      const buffer = new Uint8Array(await file.arrayBuffer());
+      const name = String(element.filename).replace(/\.png$/i, "");
+      layers.push({
+        name,
+        dataUrl: bytesToDataUrl(buffer, "image/png"),
+        x: Number(element.x) || 0,
+        y: Number(element.y) || 0,
+      });
+      await yieldToUi();
+    }
+
+    const prefix =
+      (data.settings && data.settings.prefix) || state.prefix || "element";
+    state._assembleJob = {
+      layers,
+      index: 0,
+      groupName: `${prefix}s`,
+      timeoutMs,
+    };
+    await placeNextAssembleLayer(requestId);
+  } catch (error) {
+    failActiveRequest(error && error.message ? error.message : String(error));
+  }
 }
 
 function observePreviewResize() {
@@ -1640,22 +2076,45 @@ async function beginExport() {
 
     if (state.activeRequestId !== requestId) return;
 
+    const splitData = DATA.buildSplitData({
+      settings,
+      components: scan.components,
+      meta: scan.meta || {},
+      width: scan.width,
+      height: scan.height,
+      pluginVersion: META.version,
+      exported: true,
+    });
+    state.latestSplitData = splitData;
+
     if (state.destination === "zip") {
+      const jsonBytes = new TextEncoder().encode(
+        JSON.stringify(splitData, null, 2),
+      );
+      zipEntries.push({ name: DATA.DATA_FILENAME, data: jsonBytes });
       const zipBlob = ZIP.createStoredZip(zipEntries);
       const zipName = `${settings.prefix}_elements.zip`;
       downloadBlob(zipBlob, zipName);
-      clearActiveRequest();
-      state.stage = "complete";
-      state.statusKind = "ok";
-      state.statusText = `Downloaded ${written.length} PNG${written.length === 1 ? "" : "s"} as ${zipName}.`;
-      render();
-      return;
+    } else {
+      await writeFolderSplitData(splitData);
     }
 
+    try {
+      await upsertDataLayer(splitData);
+    } catch {
+      // Layer write is best-effort; files already exported.
+    }
+
+    if (state.activeRequestId && state.activeRequestId !== requestId) {
+      // Upsert replaced the active request; clear if still hanging.
+    }
     clearActiveRequest();
     state.stage = "complete";
     state.statusKind = "ok";
-    state.statusText = `Exported ${written.length} PNG${written.length === 1 ? "" : "s"} to “${state.folderName}”.`;
+    state.statusText =
+      state.destination === "zip"
+        ? `Downloaded ${written.length} PNG${written.length === 1 ? "" : "s"} and data JSON as ${settings.prefix}_elements.zip.`
+        : `Exported ${written.length} PNG${written.length === 1 ? "" : "s"} and ${DATA.DATA_FILENAME} to “${state.folderName}”.`;
     render();
   } catch (error) {
     failActiveRequest(error && error.message ? error.message : String(error));
@@ -1783,9 +2242,18 @@ function handleDone() {
 }
 
 function handleTaggedMessage(payload) {
+  if (!payload) return;
+
+  // Data-layer replies must match their own wait tokens (may arrive while idle).
   if (
+    payload.type === "data-layer" &&
+    ((state._dataLayerWait && state._dataLayerWait.requestId === payload.requestId) ||
+      (state._dataLayerReadWait &&
+        state._dataLayerReadWait.requestId === payload.requestId))
+  ) {
+    // Fall through with activeRequestId check skipped below via dedicated branch.
+  } else if (
     !state.activeRequestId ||
-    !payload ||
     payload.requestId !== state.activeRequestId
   ) {
     return;
@@ -1819,6 +2287,67 @@ function handleTaggedMessage(payload) {
     return;
   }
 
+  if (payload.type === "data-layer") {
+    if (state._dataLayerWait && state._dataLayerWait.requestId === payload.requestId) {
+      const wait = state._dataLayerWait;
+      state._dataLayerWait = null;
+      clearActiveRequest();
+      if (!payload.ok) {
+        wait.reject(new Error(payload.message || "Could not write data layer."));
+        return;
+      }
+      wait.resolve(true);
+      render();
+      return;
+    }
+    if (state._dataLayerReadWait && state._dataLayerReadWait.requestId === payload.requestId) {
+      const wait = state._dataLayerReadWait;
+      state._dataLayerReadWait = null;
+      clearActiveRequest();
+      if (!payload.ok || !payload.found || !payload.jsonText) {
+        wait.resolve(null);
+        return;
+      }
+      try {
+        const parsed = JSON.parse(payload.jsonText);
+        const validation = DATA.validateSplitData(parsed);
+        wait.resolve(validation.ok ? parsed : null);
+      } catch {
+        wait.resolve(null);
+      }
+      return;
+    }
+    return;
+  }
+
+  if (payload.type === "assemble-progress") {
+    if (!payload.ok) {
+      failActiveRequest(payload.message || "Could not assemble a layer.");
+      return;
+    }
+    if (!state._assembleJob) return;
+    state._assembleJob.index = payload.index + 1;
+    if (payload.done) {
+      clearActiveRequest();
+      state.stage = "complete";
+      state.statusKind = "ok";
+      state.statusText = `Assembled ${payload.total} Smart Object${payload.total === 1 ? "" : "s"}.`;
+      state._assembleJob = null;
+      render();
+      return;
+    }
+    placeNextAssembleLayer(payload.requestId);
+    return;
+  }
+
+  if (payload.type === "assemble") {
+    if (!payload.ok) {
+      failActiveRequest(payload.message || "Could not assemble elements.");
+      return;
+    }
+    return;
+  }
+
   if (payload.type === "error") {
     failActiveRequest(payload.message || "Photopea reported an error.");
   }
@@ -1846,6 +2375,7 @@ function bindEvents() {
     button.addEventListener("click", () => {
       if (button.dataset.run === "scan") beginScan();
       if (button.dataset.run === "export") beginExport();
+      if (button.dataset.run === "assemble") beginAssemble();
     });
   });
 
@@ -1957,17 +2487,30 @@ async function handlePickerMessage(event) {
     state.folderPermission = "granted";
     state.statusKind = "ok";
     state.statusText = `Using “${state.folderName}” for direct exports.`;
+    await readFolderSplitData();
+    if (
+      state.folderData &&
+      (!state.latestSplitData || !state.latestSplitData.exported)
+    ) {
+      applyRestoredSettings(state.folderData, "folder");
+    }
     render();
 
     if (state.exportAfterFolderChoice) {
       state.exportAfterFolderChoice = false;
       beginExport();
+      return;
+    }
+    if (state.assembleAfterFolderChoice) {
+      state.assembleAfterFolderChoice = false;
+      beginAssemble();
     }
     return;
   }
 
   if (event.data.type === CANCEL_MESSAGE) {
     state.exportAfterFolderChoice = false;
+    state.assembleAfterFolderChoice = false;
     state.statusKind = "error";
     state.statusText =
       event.data.reason === "unsupported"
@@ -2023,6 +2566,26 @@ state.statusText = state.embedded
   ? "Select a layer with transparent gaps, then preview."
   : "Interactive plugin preview.";
 
-loadStoredDirectoryHandle().finally(() => {
+async function bootstrapPanel() {
+  await loadStoredDirectoryHandle();
+  if (state.folderPermission === "granted") {
+    await readFolderSplitData();
+  }
+  if (state.embedded) {
+    try {
+      const layerData = await requestDataLayerRead();
+      if (layerData) {
+        applyRestoredSettings(layerData, "document");
+      } else if (state.folderData) {
+        applyRestoredSettings(state.folderData, "folder");
+      }
+    } catch {
+      // Soft restore only.
+    }
+  } else if (state.folderData) {
+    applyRestoredSettings(state.folderData, "folder");
+  }
   render();
-});
+}
+
+bootstrapPanel();

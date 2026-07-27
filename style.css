@@ -522,6 +522,10 @@ button:disabled, input:disabled { cursor: wait; opacity: .62; }
   gap: 7px;
   margin-top: 10px;
 }
+.action-row-single {
+  grid-template-columns: 1fr;
+  margin-top: 7px;
+}
 .action-row button {
   height: 34px;
   border-radius: 5px;

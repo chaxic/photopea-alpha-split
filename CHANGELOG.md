@@ -2,6 +2,20 @@
 
 All notable changes to Alpha Split for Photopea are documented here.
 
+## [1.3.0] - 2026-07-27
+
+### Added
+
+- Dual metadata persistence: hidden `AlphaSplit Data` text layer in the PSD and
+  `alpha-split-data.json` in the export folder (also included in ZIP exports).
+- Settings restore from the PSD data layer (with folder JSON fallback).
+- **Assemble Elements** reimports exported folder PNGs as Smart Objects at their
+  bounding-box positions, grouped under `{prefix}s`.
+
+### Verification
+
+- Automated checks passed on 27 July 2026.
+
 ## [1.2.5] - 2026-07-27
 
 ### Fixed
