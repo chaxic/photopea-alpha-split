@@ -1,0 +1,24 @@
+(function (root, factory) {
+  var meta = factory();
+
+  if (typeof module === "object" && module.exports) {
+    module.exports = meta;
+  }
+
+  root.ALPHA_SPLIT_META = meta;
+}(typeof globalThis !== "undefined" ? globalThis : this, function () {
+  "use strict";
+
+  return Object.freeze({
+    name: "Alpha Split",
+    version: "1.0.0",
+    testedPhotopea: "5.6",
+    scriptingVersion: "30",
+    verifiedDate: "2026-07-27",
+    verifiedLabel: "27 July 2026",
+    requestTimeoutMs: 120000,
+    repositoryUrl: "https://github.com/chaxic/photopea-alpha-split",
+    pluginUrl: "https://chaxic.github.io/photopea-alpha-split/",
+    localPort: 4178,
+  });
+}));
