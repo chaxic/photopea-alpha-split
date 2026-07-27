@@ -178,15 +178,88 @@ test("Import and Position are separate operations", () => {
   assert.doesNotMatch(app, /data-run="assemble"/);
   // Import claims the new "image" layer and must verify the rename.
   assert.match(app, /knownLayerIds/);
-  assert.match(app, /findNewImageLayer|name === "image"/);
+  assert.match(app, /name === "image"/);
   assert.match(app, /renamed = String\(resultLayer\.name\) === expected/);
   assert.match(app, /awaitingOpenDone/);
   assert.match(app, /matchComponentsToElements|CORE\.matchComponentsToElements/);
+  // Placing a Smart Object leaves Free Transform open; commit before rename.
+  assert.match(app, /commitActiveTransform/);
+  assert.match(app, /stringIDToTypeID\("commit"\)/);
+});
+
+// Photopea runs these strings, so a syntax error there is invisible to the panel:
+// the script never replies and the operation hangs instead of failing.
+function generatedPhotopeaScripts(app) {
+  const helpersStart = app.indexOf("function commonHelpers() {");
+  const helpersOpen = app.indexOf("return `", helpersStart) + "return `".length;
+  const helpers = app.slice(helpersOpen, app.indexOf("`;", helpersOpen));
+
+  const opener = "  return `\n(function () {";
+  const closer = "\n}());`;";
+  return app
+    .split(opener)
+    .slice(1)
+    .map((chunk) => {
+      const body = "(function () {" + chunk.slice(0, chunk.indexOf(closer)) + "\n}());";
+      return body
+        .replaceAll("${commonHelpers()}", helpers)
+        .replace(/\$\{[^}]*\}/g, "null");
+    });
+}
+
+test("every generated Photopea script parses", () => {
+  const app = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
+  const scripts = generatedPhotopeaScripts(app);
+  assert.ok(scripts.length >= 10, `expected many scripts, found ${scripts.length}`);
+  for (const script of scripts) {
+    assert.doesNotThrow(
+      () => new Function(script),
+      `generated script does not parse:\n${script.slice(0, 400)}`,
+    );
+  }
+});
+
+test("import can only claim layers it placed", () => {
+  const app = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
+  // Every pre-existing layer is baselined before the first PNG is placed.
+  assert.match(app, /collectLayerIds\(documentRef, \[\]\)/);
+  assert.match(app, /state\._importJob\.knownLayerIds = Array\.isArray\(payload\.knownLayerIds\)/);
+  // Claiming is name-gated and never touches text layers or the data layer.
+  assert.match(app, /function isCandidate/);
+  assert.match(app, /function isNamedForPlacement/);
+  assert.match(app, /if \(isTextLayer\(layer\)\) return false/);
+  assert.match(app, /String\(layer\.name\) !== settings\.dataLayerName/);
+  // The blind "first unknown layer wins" fallback renamed user artwork.
+  assert.doesNotMatch(app, /findNewestUnknownArtLayer/);
+  // A stalled step fails in seconds and reports what Photopea actually created.
+  assert.match(app, /IMPORT_STEP_TIMEOUT_MS/);
+  assert.match(app, /unknownNames/);
+});
+
+test("layers move into groups without the illegal INSIDE placement", () => {
+  const app = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
+  // ElementPlacement.INSIDE throws Illegal Argument for LayerSet targets and can
+  // abort the whole script (try/catch does not always catch it), so never call it.
+  assert.match(app, /layer\.move\(anchor, ElementPlacement\.PLACEBEFORE\)/);
+  assert.match(app, /layer\.move\(temporary, ElementPlacement\.PLACEBEFORE\)/);
+  assert.doesNotMatch(app, /move\([^,]+,\s*(?:ElementPlacement\.INSIDE|inside)\)/);
+  assert.doesNotMatch(app, /layer\.move\(group,/);
+  // Success is confirmed by membership, not by "the call did not throw".
+  assert.match(app, /if \(isInsideGroup\(layer, group\)\) return true/);
+});
+
+test("the data layer survives being renamed", () => {
+  const app = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
+  assert.match(app, /function findDataLayerByText/);
+  assert.match(app, /findDataLayer\(documentRef, settings\.layerName\)/);
+  assert.doesNotMatch(app, /findArtLayerByName\(documentRef, settings\.layerName\)/);
 });
 
 test("Position matches layers by name and uses stored bbox origins", () => {
   const app = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
-  assert.match(app, /findArtLayerByName\(documentRef, item\.name\)/);
+  // Text layers can share an element name, so only pixel layers are positioned.
+  assert.match(app, /findPlacedLayerByName\(documentRef, item\.name\)/);
+  assert.match(app, /function findPlacedLayerByName/);
   assert.match(app, /item\.x - px\(bounds\[0\]\)/);
   assert.match(app, /item\.y - px\(bounds\[1\]\)/);
   assert.match(app, /elementLayerName/);

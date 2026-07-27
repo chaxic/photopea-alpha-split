@@ -2,6 +2,37 @@
 
 All notable changes to Alpha Split for Photopea are documented here.
 
+## [1.3.6] - 2026-07-28
+
+### Fixed
+
+- **Import Elements** no longer hangs on the first element. Two causes:
+  1. Layers were moved into the group with `ElementPlacement.INSIDE`, which is
+     an illegal argument for a group target and aborted the script mid-run, so
+     no reply ever came back and the panel spun forever. Layers now move relative
+     to a child of the group (a temporary anchor layer is used when the group is
+     empty) and membership is verified afterwards instead of assuming a call that
+     did not throw worked.
+  2. `app.open(..., true)` leaves Free Transform open; later rename scripts could
+     hang forever. Import now commits Free Transform before naming, prefers a
+     fresh `"image"` layer over leftovers, and retries naming if Photopea's
+     `"done"` arrives without an `import-placed` echo.
+- Import can no longer rename or move layers it did not place. Every existing
+  layer is recorded before the first PNG is placed, and a layer is claimed only
+  when it is an untracked pixel layer named `image` (or already named for the
+  element). Previously the "first unknown layer wins" fallback could rename the
+  hidden `AlphaSplit Data` layer to `element_01` and drag it into the group.
+- **Position Elements** skips text layers when matching names, so a stray text
+  layer cannot be moved in place of a missing element.
+- The `AlphaSplit Data` layer is found by its contents when its name has been
+  changed, and the name is repaired on the next save.
+
+### Changed
+
+- Import steps now use a 45 second per-step timeout instead of one long
+  whole-job timeout, and a step that never produces a layer reports the names
+  Photopea actually created instead of failing blind.
+
 ## [1.3.5] - 2026-07-28
 
 ### Changed

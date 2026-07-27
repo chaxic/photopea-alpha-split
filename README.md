@@ -5,11 +5,11 @@ opaque regions through the alpha channel, lets you fix the detection in an
 interactive ID mask, exports each region as a cropped PNG, and can reimport and
 position those PNGs as Smart Objects.
 
-**Current version:** v1.3.5  
+**Current version:** v1.3.6  
 **Compatibility:** Tested with Photopea 5.6 · scripting v30  
 **Last verified:** 28 July 2026
 
-**Live plugin:** [chaxic.github.io/photopea-alpha-split](https://chaxic.github.io/photopea-alpha-split/?v=1.3.5)
+**Live plugin:** [chaxic.github.io/photopea-alpha-split](https://chaxic.github.io/photopea-alpha-split/?v=1.3.6)
 
 ## Features
 
@@ -31,18 +31,18 @@ position those PNGs as Smart Objects.
 
 ### Public GitHub Pages
 
-1. Open the [installer page](https://chaxic.github.io/photopea-alpha-split/?v=1.3.5).
+1. Open the [installer page](https://chaxic.github.io/photopea-alpha-split/?v=1.3.6).
 2. Download `alpha-split-photopea.json`.
 3. In Photopea, open **Window → Plugins → Add Plugin**.
 4. Select the downloaded JSON file.
-5. Open the panel and confirm the badge shows **v1.3.5**.
+5. Open the panel and confirm the badge shows **v1.3.6**.
 
 ### Local development
 
 1. Run `npm run dev` (serves at `http://127.0.0.1:4178`).
 2. In Photopea, open **Window → Plugins → Add Plugin**.
 3. Select `plugin.local.json` from this folder.
-4. Confirm the panel shows **v1.3.5** and the α icon.
+4. Confirm the panel shows **v1.3.6** and the α icon.
 
 ## Use
 
@@ -72,9 +72,13 @@ the element's bounding box in full document pixels:
 { "id": 1, "filename": "element_01.png", "x": 120, "y": 64, "width": 96, "height": 80 }
 ```
 
-**Position Elements** matches `filename` (without `.png`) to the layer name and
-translates the layer so its top-left corner sits at `x`, `y`. Layers still named
-`image`, or renamed by hand, are reported as missing.
+**Position Elements** matches `filename` (without `.png`) to the name of a pixel
+layer and translates that layer so its top-left corner sits at `x`, `y`. Layers
+still named `image`, or renamed by hand, are reported as missing. Text layers are
+never matched, so the `AlphaSplit Data` layer cannot be moved by mistake.
+
+Import records every layer that already exists before the first PNG is placed, so
+it only ever renames and groups the Smart Objects it created itself.
 
 ## Development
 

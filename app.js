@@ -13,6 +13,12 @@ const DB_NAME = "photopea-alpha-split";
 const DB_VERSION = 1;
 const STORE_NAME = "handles";
 const DIRECTORY_KEY = "export-directory";
+// Each import step is one short script, so a stalled step should surface quickly
+// instead of hiding behind a whole-job timeout.
+const IMPORT_STEP_TIMEOUT_MS = 45000;
+// Give Photopea time to finish placing before we try to leave Free Transform.
+const IMPORT_CAPTURE_DELAY_MS = 400;
+const IMPORT_CAPTURE_RETRIES = 24;
 
 if (!META || !CORE || !ZIP || !DATA) {
   const root = document.querySelector("#app");
@@ -536,13 +542,71 @@ function commonHelpers() {
     return null;
   }
   function findLayerSetByName(container, wantedName) {
-    for (var i = 0; i < container.layerSets.length; i++) {
-      var group = container.layerSets[i];
-      if (group.name === wantedName) return group;
-      var nested = findLayerSetByName(group, wantedName);
+    // Walk .layers instead of .layerSets so nested recursion stays on solid API.
+    for (var i = 0; i < container.layers.length; i++) {
+      var item = container.layers[i];
+      if (item.typename !== "LayerSet") continue;
+      if (item.name === wantedName) return item;
+      var nested = findLayerSetByName(item, wantedName);
       if (nested) return nested;
     }
     return null;
+  }
+  function commitActiveTransform() {
+    // app.open(..., true) often leaves Free Transform open. While it is modal,
+    // later scripts can hang forever and never echo import-placed.
+    var DM = typeof DialogModes !== "undefined" ? DialogModes.NO : undefined;
+    try {
+      executeAction(stringIDToTypeID("commit"), undefined, DM);
+      return true;
+    } catch (_) {}
+    try {
+      executeAction(charIDToTypeID("ExeF"), undefined, DM);
+      return true;
+    } catch (_) {}
+    try {
+      var desc = new ActionDescriptor();
+      var ref = new ActionReference();
+      ref.putEnumerated(
+        stringIDToTypeID("layer"),
+        stringIDToTypeID("ordinal"),
+        stringIDToTypeID("targetEnum"),
+      );
+      desc.putReference(stringIDToTypeID("null"), ref);
+      desc.putUnitDouble(stringIDToTypeID("width"), stringIDToTypeID("percentUnit"), 100);
+      desc.putUnitDouble(stringIDToTypeID("height"), stringIDToTypeID("percentUnit"), 100);
+      executeAction(stringIDToTypeID("transform"), desc, DM);
+      return true;
+    } catch (_) {}
+    try {
+      var layer = app.activeDocument.activeLayer;
+      if (layer && layer.typename === "ArtLayer") layer.translate(0, 0);
+      return true;
+    } catch (_) {}
+    return false;
+  }
+  function collectLayerIds(container, out) {
+    for (var i = 0; i < container.layers.length; i++) {
+      var item = container.layers[i];
+      var id = layerId(item);
+      if (id >= 0) out.push(id);
+      if (item.typename === "LayerSet") collectLayerIds(item, out);
+    }
+    return out;
+  }
+  function isTextLayer(layer) {
+    // Trust layer.kind when Photopea exposes it: probing textItem misreports pixel
+    // layers in some builds, which would hide a freshly placed Smart Object.
+    try {
+      if (typeof LayerKind !== "undefined" && LayerKind.TEXT) {
+        var kind = layer.kind;
+        if (kind) return kind === LayerKind.TEXT;
+      }
+    } catch (_) {}
+    try {
+      return String(layer.textItem.contents || "").length > 0;
+    } catch (_) {}
+    return false;
   }
   function resolveGroup(documentRef, wantedId, wantedName) {
     var group = null;
@@ -555,18 +619,46 @@ function commonHelpers() {
     if (!group || group.typename !== "LayerSet") return null;
     return group;
   }
+  // Photoshop/Photopea reject ElementPlacement.INSIDE with a LayerSet target, and the
+  // failure can abort the whole script (try/catch does not always catch it), so move
+  // relative to a child of the group and confirm the result.
   function moveIntoGroup(layer, group) {
+    if (isInsideGroup(layer, group)) return true;
+    var id = layerId(layer);
+    var anchor = null;
     try {
-      layer.move(group, ElementPlacement.INSIDE);
-      return true;
+      for (var i = 0; i < group.layers.length; i++) {
+        if (layerId(group.layers[i]) !== id) {
+          anchor = group.layers[i];
+          break;
+        }
+      }
     } catch (_) {}
-    try {
-      layer.move(group, ElementPlacement.PLACEATBEGINNING);
-      return true;
-    } catch (_) {}
+
+    if (anchor) {
+      try { layer.move(anchor, ElementPlacement.PLACEBEFORE); } catch (_) {}
+      if (isInsideGroup(layer, group)) return true;
+      try { layer.move(anchor, ElementPlacement.PLACEAFTER); } catch (_) {}
+      if (isInsideGroup(layer, group)) return true;
+    } else {
+      var temporary = null;
+      try { temporary = group.artLayers.add(); } catch (_) { temporary = null; }
+      if (temporary) {
+        try { layer.move(temporary, ElementPlacement.PLACEBEFORE); } catch (_) {}
+        try { temporary.remove(); } catch (_) {}
+        if (isInsideGroup(layer, group)) return true;
+      }
+    }
     return false;
   }
   function isInsideGroup(layer, group) {
+    var id = layerId(layer);
+    if (!(id >= 0)) return false;
+    try {
+      for (var i = 0; i < group.layers.length; i++) {
+        if (layerId(group.layers[i]) === id) return true;
+      }
+    } catch (_) {}
     try {
       return layerId(layer.parent) === layerId(group);
     } catch (_) {
@@ -583,6 +675,44 @@ function commonHelpers() {
       }
     }
     return null;
+  }
+  // Placed elements are pixel layers, so text layers with the same name are ignored.
+  function findPlacedLayerByName(container, wantedName) {
+    for (var i = 0; i < container.layers.length; i++) {
+      var item = container.layers[i];
+      if (item.typename === "ArtLayer" && item.name === wantedName && !isTextLayer(item)) {
+        return item;
+      }
+      if (item.typename === "LayerSet") {
+        var nested = findPlacedLayerByName(item, wantedName);
+        if (nested) return nested;
+      }
+    }
+    return null;
+  }
+  function layerText(layer) {
+    try { return String(layer.textItem.contents || ""); } catch (_) { return ""; }
+  }
+  // A renamed data layer is still recognisable by its payload, so look inside text
+  // layers before giving up on the stored settings.
+  function findDataLayerByText(container) {
+    for (var i = 0; i < container.layers.length; i++) {
+      var item = container.layers[i];
+      if (item.typename === "ArtLayer" && isTextLayer(item)) {
+        var text = layerText(item);
+        if (text.indexOf("alpha-split") >= 0 && text.indexOf("elements") >= 0) return item;
+      }
+      if (item.typename === "LayerSet") {
+        var nested = findDataLayerByText(item);
+        if (nested) return nested;
+      }
+    }
+    return null;
+  }
+  function findDataLayer(documentRef, layerName) {
+    var layer = findArtLayerByName(documentRef, layerName);
+    if (layer && isTextLayer(layer)) return layer;
+    return layer || findDataLayerByText(documentRef);
   }
   function findDocumentByName(name, skip) {
     if (!app.documents) return null;
@@ -852,13 +982,13 @@ function makeUpsertDataLayerScript({ requestId, jsonText }) {
       throw new Error("Open a document before saving Alpha Split data.");
     }
     var documentRef = app.activeDocument;
-    var layer = findArtLayerByName(documentRef, settings.layerName);
+    var layer = findDataLayer(documentRef, settings.layerName);
     if (!layer) {
       layer = documentRef.artLayers.add();
       layer.kind = LayerKind.TEXT;
-      layer.name = settings.layerName;
     }
     try { layer.kind = LayerKind.TEXT; } catch (_) {}
+    try { layer.name = settings.layerName; } catch (_) {}
     try { layer.textItem.contents = settings.jsonText; } catch (textError) {
       throw new Error("Could not write the Alpha Split data layer text.");
     }
@@ -888,14 +1018,12 @@ function makeReadDataLayerScript(requestId) {
       return;
     }
     var documentRef = app.activeDocument;
-    var layer = findArtLayerByName(documentRef, settings.layerName);
+    var layer = findDataLayer(documentRef, settings.layerName);
     if (!layer) {
       send("data-layer", { ok: true, found: false, jsonText: null });
       return;
     }
-    var text = "";
-    try { text = String(layer.textItem.contents || ""); } catch (_) { text = ""; }
-    send("data-layer", { ok: true, found: true, jsonText: text });
+    send("data-layer", { ok: true, found: true, jsonText: layerText(layer) });
   } catch (error) {
     send("data-layer", {
       ok: false,
@@ -937,10 +1065,12 @@ function makeImportEnsureGroupScript({ requestId, groupName }) {
       group = documentRef.layerSets.add();
       group.name = settings.groupName;
     }
+    // Baseline every existing layer so import can only ever claim layers it placed.
     send("import-group", {
       ok: true,
       groupId: layerId(group),
-      groupName: settings.groupName
+      groupName: settings.groupName,
+      knownLayerIds: collectLayerIds(documentRef, [])
     });
   } catch (error) {
     send("import-group", {
@@ -990,6 +1120,7 @@ function makeImportCaptureScript({
     knownLayerIds: knownLayerIds || [],
     groupId,
     groupName,
+    dataLayerName: DATA.DATA_LAYER_NAME,
   });
   return `
 (function () {
@@ -999,76 +1130,118 @@ function makeImportCaptureScript({
     if (!app.documents || app.documents.length === 0) {
       throw new Error("The source document is no longer open.");
     }
+    // Must run before any layer walk — Free Transform blocks scripts otherwise.
+    commitActiveTransform();
+
     var documentRef = app.activeDocument;
     var known = {};
     var knownList = settings.knownLayerIds || [];
     for (var k = 0; k < knownList.length; k++) {
-      known[Number(knownList[k])] = true;
+      var knownId = Number(knownList[k]);
+      if (knownId >= 0) known[knownId] = true;
     }
 
     function isKnown(layer) {
-      return !!known[layerId(layer)];
+      // Without usable layer ids nothing is "known"; naming rules still guard the claim.
+      var id = layerId(layer);
+      if (!(id >= 0)) return false;
+      return !!known[id];
     }
 
-    function findNewImageLayer(container) {
-      // Photopea names every freshly placed Smart Object "image".
+    // Only untracked pixel layers may be claimed, so existing artwork and the data
+    // layer can never be renamed or moved by an import.
+    function isCandidate(layer) {
+      if (!layer || layer.typename !== "ArtLayer") return false;
+      if (isKnown(layer)) return false;
+      if (isTextLayer(layer)) return false;
+      return String(layer.name) !== settings.dataLayerName;
+    }
+    function isNamedForPlacement(layer) {
+      var name = String(layer.name);
+      return name === "image" || name === String(settings.name);
+    }
+    function collectCandidates(container, out) {
       for (var i = 0; i < container.layers.length; i++) {
         var item = container.layers[i];
-        if (item.typename === "ArtLayer" && item.name === "image" && !isKnown(item)) {
-          return item;
-        }
         if (item.typename === "LayerSet") {
-          var nested = findNewImageLayer(item);
-          if (nested) return nested;
+          collectCandidates(item, out);
+          continue;
+        }
+        if (isCandidate(item)) out.push(item);
+      }
+      return out;
+    }
+
+    var candidates = collectCandidates(documentRef, []);
+    var resultLayer = null;
+    // Prefer a fresh "image" Smart Object over an already-named leftover.
+    for (var c = 0; c < candidates.length; c++) {
+      if (String(candidates[c].name) === "image") {
+        resultLayer = candidates[c];
+        break;
+      }
+    }
+    if (!resultLayer) {
+      for (var c2 = 0; c2 < candidates.length; c2++) {
+        if (isNamedForPlacement(candidates[c2])) {
+          resultLayer = candidates[c2];
+          break;
         }
       }
-      return null;
     }
-
-    function findNewestUnknownArtLayer(container) {
-      for (var i = 0; i < container.layers.length; i++) {
-        var item = container.layers[i];
-        if (item.typename === "ArtLayer" && !isKnown(item)) return item;
-        if (item.typename === "LayerSet") {
-          var nested = findNewestUnknownArtLayer(item);
-          if (nested) return nested;
-        }
-      }
-      return null;
+    // Photopea calls a freshly placed Smart Object "image"; if it ever picks another
+    // name, a single new pixel layer is still unambiguous once the baseline is known.
+    if (!resultLayer && knownList.length > 0 && candidates.length === 1) {
+      resultLayer = candidates[0];
     }
-
-    var resultLayer = findNewImageLayer(documentRef);
     if (!resultLayer) {
-      var active = documentRef.activeLayer;
-      if (
-        active &&
-        active.typename === "ArtLayer" &&
-        !isKnown(active) &&
-        (active.name === "image" || active.name === settings.name)
-      ) {
-        resultLayer = active;
-      }
+      var active = null;
+      try { active = documentRef.activeLayer; } catch (_) { active = null; }
+      if (active && isCandidate(active) && isNamedForPlacement(active)) resultLayer = active;
     }
-    if (!resultLayer) resultLayer = findNewestUnknownArtLayer(documentRef);
 
     if (!resultLayer) {
+      var unknownNames = [];
+      for (var u = 0; u < candidates.length && u < 6; u++) {
+        unknownNames.push(String(candidates[u].name));
+      }
       send("import-placed", {
         ok: false,
         notReady: true,
+        unknownNames: unknownNames,
         message: "Waiting for placed Smart Object “" + settings.name + "”."
-      });
-      return;
-    }
-    if (resultLayer.typename === "LayerSet") {
-      send("import-placed", {
-        ok: false,
-        notReady: true,
-        message: "Smart Object is not ready yet."
       });
       return;
     }
 
     var expected = String(settings.name);
+    // Already correctly named from a prior attempt — claim it and move on.
+    if (String(resultLayer.name) === expected) {
+      var groupedEarly = false;
+      try {
+        var groupEarly = resolveGroup(documentRef, settings.groupId, settings.groupName);
+        if (groupEarly) groupedEarly = moveIntoGroup(resultLayer, groupEarly);
+      } catch (_) {}
+      try { resultLayer.visible = true; } catch (_) {}
+      send("import-placed", {
+        ok: true,
+        index: settings.index,
+        total: settings.total,
+        name: expected,
+        grouped: groupedEarly,
+        layerId: layerId(resultLayer)
+      });
+      return;
+    }
+
+    // Free the expected name if a leftover unknown layer is sitting on it.
+    try {
+      var occupant = findArtLayerByName(documentRef, expected);
+      if (occupant && occupant !== resultLayer && !isKnown(occupant)) {
+        try { occupant.name = expected + "__prev"; } catch (_) {}
+      }
+    } catch (_) {}
+
     var renamed = false;
     try {
       resultLayer.name = expected;
@@ -1079,13 +1252,20 @@ function makeImportCaptureScript({
     if (!renamed) {
       send("import-placed", {
         ok: false,
-        message: "Photopea would not rename the placed layer to “" + expected + "”."
+        message: "Photopea would not rename the placed layer to “" + expected +
+          "” (got “" + String(resultLayer.name) + "”)."
       });
       return;
     }
 
-    var group = resolveGroup(documentRef, settings.groupId, settings.groupName);
-    var grouped = group ? moveIntoGroup(resultLayer, group) : false;
+    // Grouping is cosmetic: never let it break the echo that advances the queue.
+    var grouped = false;
+    try {
+      var group = resolveGroup(documentRef, settings.groupId, settings.groupName);
+      if (group) grouped = moveIntoGroup(resultLayer, group);
+    } catch (_) {
+      grouped = false;
+    }
     try { resultLayer.visible = true; } catch (_) {}
     try { documentRef.activeLayer = resultLayer; } catch (_) {}
 
@@ -1119,6 +1299,7 @@ function makePositionByNameScript({ requestId, groupName, placements }) {
       throw new Error("Open the document that holds the imported elements.");
     }
     var documentRef = app.activeDocument;
+    commitActiveTransform();
     var group = resolveGroup(documentRef, -1, settings.groupName);
     if (!group) {
       group = documentRef.layerSets.add();
@@ -1130,12 +1311,14 @@ function makePositionByNameScript({ requestId, groupName, placements }) {
     var list = settings.placements || [];
     for (var i = 0; i < list.length; i++) {
       var item = list[i];
-      var target = findArtLayerByName(documentRef, item.name);
+      var target = findPlacedLayerByName(documentRef, item.name);
       if (!target) {
         missing.push(item.name);
         continue;
       }
-      if (!isInsideGroup(target, group)) moveIntoGroup(target, group);
+      try {
+        if (!isInsideGroup(target, group)) moveIntoGroup(target, group);
+      } catch (_) {}
       try { target.visible = true; } catch (_) {}
       try {
         var bounds = target.bounds;
@@ -2103,7 +2286,7 @@ async function placeNextImportLayer(requestId) {
     `Importing ${job.index + 1} / ${job.layers.length}: ${layer.name}`,
     requestId,
     "import",
-    job.timeoutMs,
+    IMPORT_STEP_TIMEOUT_MS,
   );
   render();
 
@@ -2127,7 +2310,7 @@ function captureImportLayer(requestId) {
     `Naming ${job.index + 1} / ${job.layers.length}: ${layer.name}`,
     requestId,
     "import",
-    job.timeoutMs,
+    IMPORT_STEP_TIMEOUT_MS,
   );
   render();
 
@@ -2252,7 +2435,6 @@ async function beginImportElements() {
       index: 0,
       groupName,
       groupId: null,
-      timeoutMs,
       phase: "ensure",
       captureRetries: 0,
       named: [],
@@ -2266,7 +2448,7 @@ async function beginImportElements() {
       `Preparing group “${groupName}”…`,
       requestId,
       "import",
-      timeoutMs,
+      IMPORT_STEP_TIMEOUT_MS,
     );
     render();
     postScript(makeImportEnsureGroupScript({ requestId, groupName }));
@@ -2989,11 +3171,39 @@ function handleDone() {
         ) {
           captureImportLayer(state.activeRequestId);
         }
-      }, 120);
+      }, IMPORT_CAPTURE_DELAY_MS);
       return;
     }
 
-    // Naming scripts also emit "done"; only import-placed advances the loop.
+    // If the naming script finished without an import-placed echo (or Free Transform
+    // blocked the first attempt), retry instead of sitting on "Naming…" forever.
+    if (
+      (state.stage === "naming the layer" || job.phase === "capturing") &&
+      job.index < job.layers.length
+    ) {
+      job.captureRetries = (job.captureRetries || 0) + 1;
+      if (job.captureRetries > IMPORT_CAPTURE_RETRIES) {
+        failActiveRequest(
+          `Could not name “${job.layers[job.index].name}” after Free Transform. Press Enter in Photopea to confirm the place, then try Import again.`,
+        );
+        return;
+      }
+      const indexAtName = job.index;
+      window.setTimeout(
+        () => {
+          if (
+            state.activeRequestId &&
+            state.activeOperation === "import" &&
+            state._importJob &&
+            state._importJob.index === indexAtName &&
+            state.stage === "naming the layer"
+          ) {
+            captureImportLayer(state.activeRequestId);
+          }
+        },
+        Math.min(1000, 250 + job.captureRetries * 100),
+      );
+    }
     return;
   }
 
@@ -3089,6 +3299,9 @@ function handleTaggedMessage(payload) {
     }
     if (!state._importJob) return;
     state._importJob.groupId = payload.groupId;
+    state._importJob.knownLayerIds = Array.isArray(payload.knownLayerIds)
+      ? payload.knownLayerIds.slice()
+      : [];
     placeNextImportLayer(payload.requestId);
     return;
   }
@@ -3098,20 +3311,27 @@ function handleTaggedMessage(payload) {
     if (!job) return;
     if (payload.notReady) {
       job.captureRetries = (job.captureRetries || 0) + 1;
-      if (job.captureRetries > 8) {
+      if (job.captureRetries > IMPORT_CAPTURE_RETRIES) {
+        const seen = Array.isArray(payload.unknownNames)
+          ? payload.unknownNames.filter(Boolean)
+          : [];
+        const hint = seen.length ? ` New layers seen: ${seen.join(", ")}.` : "";
         failActiveRequest(
-          payload.message || "Smart Object did not finish loading in time.",
+          `${payload.message || "Smart Object did not finish loading in time."}${hint}`,
         );
         return;
       }
-      window.setTimeout(() => {
-        if (
-          state.activeRequestId === payload.requestId &&
-          state.activeOperation === "import"
-        ) {
-          captureImportLayer(payload.requestId);
-        }
-      }, 150 + job.captureRetries * 50);
+      window.setTimeout(
+        () => {
+          if (
+            state.activeRequestId === payload.requestId &&
+            state.activeOperation === "import"
+          ) {
+            captureImportLayer(payload.requestId);
+          }
+        },
+        Math.min(1000, 200 + job.captureRetries * 100),
+      );
       return;
     }
     if (!payload.ok) {
