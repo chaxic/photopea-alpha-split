@@ -791,6 +791,8 @@ function makeCaptureScript(requestId) {
     if (!app.documents || app.documents.length === 0) {
       throw new Error("Open a document before scanning.");
     }
+    // Import / place can leave Free Transform open; saveToOE then never finishes.
+    commitActiveTransform();
     var documentRef = app.activeDocument;
     var layer = documentRef.activeLayer;
     if (!layer) throw new Error("Select a layer first.");
@@ -832,6 +834,8 @@ function makeLightCaptureScript(requestId) {
     if (!app.documents || app.documents.length === 0) {
       throw new Error("Open a document before restoring the ID mask.");
     }
+    // Same Free Transform trap as Generate — commit before hide/export.
+    commitActiveTransform();
     documentRef = app.activeDocument;
     var layer = documentRef.activeLayer;
     if (!layer) throw new Error("Select a layer first.");
@@ -3903,10 +3907,21 @@ async function handlePickerMessage(event) {
   }
 }
 
+function binaryFromMessage(data) {
+  if (data instanceof ArrayBuffer) return data;
+  // Some Photopea builds deliver export bytes as a TypedArray view.
+  if (ArrayBuffer.isView(data) && data.buffer instanceof ArrayBuffer) {
+    return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+  }
+  return null;
+}
+
 window.addEventListener("message", (event) => {
   if (
     event.data &&
     typeof event.data === "object" &&
+    !(event.data instanceof ArrayBuffer) &&
+    !ArrayBuffer.isView(event.data) &&
     (event.data.type === READY_MESSAGE ||
       event.data.type === CANCEL_MESSAGE ||
       event.data.type === JSON_READY_MESSAGE)
@@ -3917,8 +3932,9 @@ window.addEventListener("message", (event) => {
 
   if (!state.embedded || event.source !== window.parent) return;
 
-  if (event.data instanceof ArrayBuffer) {
-    handleBinary(event.data);
+  const binary = binaryFromMessage(event.data);
+  if (binary) {
+    handleBinary(binary);
     return;
   }
 

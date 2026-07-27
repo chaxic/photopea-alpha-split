@@ -2,6 +2,20 @@
 
 All notable changes to Alpha Split for Photopea are documented here.
 
+## [1.3.8] - 2026-07-28
+
+### Fixed
+
+- **Generate ID Mask** (and Restore’s light-capture fallback) no longer hang when
+  Free Transform is still open after Import. Capture scripts commit the active
+  transform before `saveToOE` / layer export.
+- Binary exports delivered as TypedArray views are accepted, not only raw
+  `ArrayBuffer`s.
+
+### Verification
+
+- Automated checks passed on 28 July 2026.
+
 ## [1.3.7] - 2026-07-28
 
 ### Added

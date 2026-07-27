@@ -279,6 +279,14 @@ test("Restore ID Mask skips the PSD snapshot round trip", () => {
   // Generate keeps the workfile-safe PSD snapshot.
   assert.match(app, /saveToOE\("psd"\)/);
   assert.match(app, /exporting the layer/);
+  // Free Transform left open after Import blocks saveToOE / hide-export forever.
+  const captureIdx = app.indexOf("function makeCaptureScript");
+  const lightIdx = app.indexOf("function makeLightCaptureScript");
+  const capture = app.slice(captureIdx, lightIdx);
+  const light = app.slice(lightIdx, app.indexOf("function makePrepareTempScript"));
+  assert.match(capture, /commitActiveTransform\(\)/);
+  assert.match(light, /commitActiveTransform\(\)/);
+  assert.match(app, /binaryFromMessage/);
 });
 
 test("Generate and Restore ID Mask replace Preview", () => {
