@@ -161,6 +161,61 @@ test("data-layer traffic never occupies the blocking request slot", () => {
   assert.doesNotMatch(app, /await requestDataLayerRead\(\);\s*\n\s*if \(layerData\)/);
 });
 
+test("assemble uses two-phase open/finish after Photopea done", () => {
+  const app = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
+  assert.match(app, /makeAssembleOpenScript/);
+  assert.match(app, /makeAssembleFinishScript/);
+  assert.match(app, /makeAssembleEnsureGroupScript/);
+  assert.doesNotMatch(app, /makeAssemblePlaceScript/);
+  assert.match(app, /activeOperation === "assemble"/);
+  assert.match(app, /labelsFromElements|CORE\.labelsFromElements/);
+  assert.match(app, /Restored \$\{components\.length\}|Restored \$\{.*\} element/);
+});
+
+test("labelsFromElements paints opaque pixels from full-res bboxes", () => {
+  const opaque = new Uint8Array(8 * 8);
+  for (let y = 1; y <= 2; y++) {
+    for (let x = 1; x <= 2; x++) opaque[y * 8 + x] = 1;
+  }
+  for (let y = 5; y <= 6; y++) {
+    for (let x = 5; x <= 6; x++) opaque[y * 8 + x] = 1;
+  }
+  // Full-res document 16x16; analysis 8x8 → half scale.
+  const painted = core.labelsFromElements(
+    8,
+    8,
+    opaque,
+    [
+      { id: 3, x: 2, y: 2, width: 4, height: 4 },
+      { id: 7, x: 10, y: 10, width: 4, height: 4 },
+    ],
+    16,
+    16,
+  );
+  assert.ok(painted.assigned >= 4);
+  assert.equal(painted.labels[1 * 8 + 1], 3);
+  assert.equal(painted.labels[5 * 8 + 5], 7);
+  const components = core.buildComponentsFromLabels(painted.labels, 8, 8, 1);
+  assert.equal(components.length, 2);
+});
+
+test("labelsFromElements prefers the smaller overlapping bbox", () => {
+  const opaque = new Uint8Array(4 * 4).fill(1);
+  const painted = core.labelsFromElements(
+    4,
+    4,
+    opaque,
+    [
+      { id: 1, x: 0, y: 0, width: 4, height: 4 },
+      { id: 2, x: 1, y: 1, width: 1, height: 1 },
+    ],
+    4,
+    4,
+  );
+  assert.equal(painted.labels[1 * 4 + 1], 2);
+  assert.equal(painted.labels[0], 1);
+});
+
 test("buildSplitData creates sequential filenames and bboxes", () => {
   const built = data.buildSplitData({
     settings: {

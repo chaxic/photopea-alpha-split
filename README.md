@@ -5,11 +5,11 @@ opaque regions through the alpha channel, lets you fix the detection in an
 interactive preview, exports each region as a cropped PNG, and can reassemble
 those PNGs as Smart Objects.
 
-**Current version:** v1.3.1  
+**Current version:** v1.3.2  
 **Compatibility:** Tested with Photopea 5.6 · scripting v30  
-**Last verified:** 27 July 2026
+**Last verified:** 28 July 2026
 
-**Live plugin:** [chaxic.github.io/photopea-alpha-split](https://chaxic.github.io/photopea-alpha-split/?v=1.3.1)
+**Live plugin:** [chaxic.github.io/photopea-alpha-split](https://chaxic.github.io/photopea-alpha-split/?v=1.3.2)
 
 ## Features
 
@@ -21,6 +21,7 @@ those PNGs as Smart Objects.
 - **Randomize colors** and **Update** to commit the edited element list
 - Export cropped PNGs to a remembered folder, or download a ZIP
 - Dual metadata: hidden `AlphaSplit Data` PSD layer + `alpha-split-data.json`
+- Preview restores the previous element layout from stored data when available
 - **Assemble Elements** reimports folder PNGs as Smart Objects at bbox positions
 - Workfile-safe preview via an independent temporary PSD snapshot
 - Responsive preview canvas that scales with the panel width
@@ -30,29 +31,32 @@ those PNGs as Smart Objects.
 
 ### Public GitHub Pages
 
-1. Open the [installer page](https://chaxic.github.io/photopea-alpha-split/?v=1.3.1).
+1. Open the [installer page](https://chaxic.github.io/photopea-alpha-split/?v=1.3.2).
 2. Download `alpha-split-photopea.json`.
 3. In Photopea, open **Window → Plugins → Add Plugin**.
 4. Select the downloaded JSON file.
-5. Open the panel and confirm the badge shows **v1.3.1**.
+5. Open the panel and confirm the badge shows **v1.3.2**.
 
 ### Local development
 
 1. Run `npm run dev` (serves at `http://127.0.0.1:4178`).
 2. In Photopea, open **Window → Plugins → Add Plugin**.
 3. Select `plugin.local.json` from this folder.
-4. Confirm the panel shows **v1.3.1** and the α icon.
+4. Confirm the panel shows **v1.3.2** and the α icon.
 
 ## Use
 
 1. Select one image layer with transparent gaps between elements.
-2. Choose **Preview** to detect regions without changing the workfile.
+2. Choose **Preview** to detect regions without changing the workfile. If
+   `AlphaSplit Data` (or folder JSON) already exists for this document, Preview
+   restores that element layout so you can re-edit.
 3. Optionally edit the preview (Sample / Fill / New / Update).
 4. Choose a destination (**Folder** or **ZIP**) and **Export elements**.
 5. Export writes PNGs plus `alpha-split-data.json`, and upserts a hidden
-   `AlphaSplit Data` text layer in the PSD (settings restore on reopen).
+   `AlphaSplit Data` text layer in the PSD.
 6. With Folder destination and a prior export, choose **Assemble Elements** to
-   place each PNG back into the document as a Smart Object at its original bbox.
+   place each PNG back into one `{prefix}s` group as Smart Objects at their
+   original bbox positions.
 
 Assemble intentionally modifies the document. Preview capture remains workfile-safe.
 

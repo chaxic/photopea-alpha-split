@@ -449,6 +449,84 @@
     return Array.from(seen);
   }
 
+  /**
+   * Rebuild an analysis-resolution label map from stored full-res element bboxes.
+   * Opaque pixels pick the smallest containing scaled bbox (stable with overlaps).
+   */
+  function labelsFromElements(
+    analysisWidth,
+    analysisHeight,
+    opaqueMask,
+    elements,
+    fullWidth,
+    fullHeight,
+  ) {
+    var aw = analysisWidth | 0;
+    var ah = analysisHeight | 0;
+    var fw = Math.max(1, fullWidth | 0);
+    var fh = Math.max(1, fullHeight | 0);
+    var labels = new Int32Array(aw * ah);
+    if (!elements || !elements.length || !opaqueMask) {
+      return { labels: labels, assigned: 0 };
+    }
+
+    var boxes = [];
+    var i;
+    for (i = 0; i < elements.length; i++) {
+      var el = elements[i];
+      if (!el) continue;
+      var x = Number(el.x) || 0;
+      var y = Number(el.y) || 0;
+      var w = Math.max(1, Number(el.width) || 1);
+      var h = Math.max(1, Number(el.height) || 1);
+      var minX = Math.floor((x * aw) / fw);
+      var minY = Math.floor((y * ah) / fh);
+      var maxX = Math.min(aw - 1, Math.ceil(((x + w) * aw) / fw) - 1);
+      var maxY = Math.min(ah - 1, Math.ceil(((y + h) * ah) / fh) - 1);
+      if (maxX < minX) maxX = minX;
+      if (maxY < minY) maxY = minY;
+      var id = el.id != null ? Number(el.id) : i + 1;
+      if (!Number.isFinite(id) || id <= 0) id = i + 1;
+      boxes.push({
+        id: id,
+        minX: minX,
+        minY: minY,
+        maxX: maxX,
+        maxY: maxY,
+        area: (maxX - minX + 1) * (maxY - minY + 1),
+      });
+    }
+
+    boxes.sort(function (a, b) {
+      return a.area - b.area || a.id - b.id;
+    });
+
+    var assigned = 0;
+    var px;
+    var py;
+    for (py = 0; py < ah; py++) {
+      for (px = 0; px < aw; px++) {
+        var index = py * aw + px;
+        if (!opaqueMask[index]) continue;
+        for (i = 0; i < boxes.length; i++) {
+          var box = boxes[i];
+          if (
+            px >= box.minX &&
+            px <= box.maxX &&
+            py >= box.minY &&
+            py <= box.maxY
+          ) {
+            labels[index] = box.id;
+            assigned += 1;
+            break;
+          }
+        }
+      }
+    }
+
+    return { labels: labels, assigned: assigned };
+  }
+
   return {
     labelComponents: labelComponents,
     extractComponent: extractComponent,
@@ -460,6 +538,7 @@
     nextLabelId: nextLabelId,
     propagateLabelsToFullRes: propagateLabelsToFullRes,
     buildOpaqueMaskFromImageData: buildOpaqueMaskFromImageData,
+    labelsFromElements: labelsFromElements,
     createDefaultPalette: createDefaultPalette,
     createRandomPalette: createRandomPalette,
     collectLabelIds: collectLabelIds,

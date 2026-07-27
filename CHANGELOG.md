@@ -2,6 +2,21 @@
 
 All notable changes to Alpha Split for Photopea are documented here.
 
+## [1.3.2] - 2026-07-28
+
+### Fixed
+
+- Assemble Elements waits for Photopea to finish placing each Smart Object before
+  rename/move/translate, so layers land in one `{prefix}s` group at the correct
+  bbox positions instead of nested folders piled at the canvas centre.
+- Preview restores the previous element layout from `AlphaSplit Data` / folder
+  JSON when present, so Sample/Fill/Update can continue from the last export
+  instead of a fresh (and different) downscaled detect.
+
+### Verification
+
+- Automated checks passed on 28 July 2026.
+
 ## [1.3.1] - 2026-07-28
 
 ### Fixed

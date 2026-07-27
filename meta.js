@@ -11,11 +11,11 @@
 
   return Object.freeze({
     name: "Alpha Split",
-    version: "1.3.1",
+    version: "1.3.2",
     testedPhotopea: "5.6",
     scriptingVersion: "30",
-    verifiedDate: "2026-07-27",
-    verifiedLabel: "27 July 2026",
+    verifiedDate: "2026-07-28",
+    verifiedLabel: "28 July 2026",
     requestTimeoutMs: 180000,
     previewMaxSide: 2048,
     repositoryUrl: "https://github.com/chaxic/photopea-alpha-split",

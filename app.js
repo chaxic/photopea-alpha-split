@@ -322,7 +322,7 @@ function panelHtml() {
       <footer class="panel-footer">
         <div class="panel-footer-copy">
           <span>Tested with Photopea ${escapeHtml(META.testedPhotopea)} · scripting v${escapeHtml(META.scriptingVersion)}</span>
-          <span>Assemble places Smart Objects · data saved to PSD + folder JSON</span>
+          <span>Assemble places Smart Objects in one group · data restores on Preview</span>
         </div>
         <a href="${META.repositoryUrl}" target="_blank" rel="noreferrer" title="View the Alpha Split source code on GitHub">
           View source <span aria-hidden="true">↗</span>
@@ -776,11 +776,79 @@ function makeReadDataLayerScript(requestId) {
 }());`;
 }
 
-function makeAssemblePlaceScript({
+function makeAssembleEnsureGroupScript({ requestId, groupName }) {
+  const payload = JSON.stringify({ requestId, groupName });
+  return `
+(function () {
+  var settings = ${payload};
+  ${commonHelpers()}
+  try {
+    if (!app.documents || app.documents.length === 0) {
+      throw new Error("The source document is no longer open.");
+    }
+    var documentRef = app.activeDocument;
+    // Prefer a root art layer so new groups are not nested under an active set.
+    try {
+      for (var i = 0; i < documentRef.layers.length; i++) {
+        if (documentRef.layers[i].typename === "ArtLayer") {
+          documentRef.activeLayer = documentRef.layers[i];
+          break;
+        }
+      }
+    } catch (_) {}
+
+    var group = null;
+    for (var g = 0; g < documentRef.layerSets.length; g++) {
+      if (documentRef.layerSets[g].name === settings.groupName) {
+        group = documentRef.layerSets[g];
+        break;
+      }
+    }
+    if (!group) {
+      group = documentRef.layerSets.add();
+      group.name = settings.groupName;
+    }
+    send("assemble-group", {
+      ok: true,
+      groupId: layerId(group),
+      groupName: settings.groupName
+    });
+  } catch (error) {
+    send("assemble-group", {
+      ok: false,
+      message: error && error.message ? error.message : String(error)
+    });
+  }
+}());`;
+}
+
+function makeAssembleOpenScript({ requestId, layer }) {
+  const payload = JSON.stringify({ requestId, layer });
+  return `
+(function () {
+  var settings = ${payload};
+  ${commonHelpers()}
+  try {
+    if (!app.documents || app.documents.length === 0) {
+      throw new Error("The source document is no longer open.");
+    }
+    // Place only — rename/move/translate happen after Photopea finishes loading.
+    app.open(settings.layer.dataUrl, null, true);
+  } catch (error) {
+    send("assemble", {
+      ok: false,
+      message: error && error.message ? error.message : String(error)
+    });
+  }
+}());`;
+}
+
+function makeAssembleFinishScript({
   requestId,
   layer,
   index,
   total,
+  groupId,
   groupName,
   isLast,
 }) {
@@ -789,6 +857,7 @@ function makeAssemblePlaceScript({
     layer,
     index,
     total,
+    groupId,
     groupName,
     isLast,
   });
@@ -801,30 +870,46 @@ function makeAssemblePlaceScript({
       throw new Error("The source document is no longer open.");
     }
     var documentRef = app.activeDocument;
-    var group = findLayerSetByName(documentRef, settings.groupName);
-    if (!group) {
-      group = documentRef.layerSets.add();
-      group.name = settings.groupName;
-    }
-
-    app.open(settings.layer.dataUrl, null, true);
     var resultLayer = documentRef.activeLayer;
     if (!resultLayer) {
       throw new Error("Photopea did not insert layer " + settings.layer.name + ".");
     }
+    if (resultLayer.typename === "LayerSet") {
+      send("assemble-progress", {
+        ok: false,
+        notReady: true,
+        message: "Smart Object is not ready yet."
+      });
+      return;
+    }
+
     resultLayer.name = settings.layer.name;
+
+    var group = null;
+    if (settings.groupId != null && settings.groupId >= 0) {
+      group = findLayerById(documentRef, settings.groupId);
+    }
+    if (!group || group.typename !== "LayerSet") {
+      for (var g = 0; g < documentRef.layerSets.length; g++) {
+        if (documentRef.layerSets[g].name === settings.groupName) {
+          group = documentRef.layerSets[g];
+          break;
+        }
+      }
+    }
+    if (!group || group.typename !== "LayerSet") {
+      throw new Error("Assemble group “" + settings.groupName + "” is missing.");
+    }
 
     try { resultLayer.move(group, ElementPlacement.INSIDE); }
     catch (_) {
       try { resultLayer.move(group, ElementPlacement.PLACEATBEGINNING); } catch (__) {}
     }
 
-    try {
-      var bounds = resultLayer.bounds;
-      var dx = settings.layer.x - px(bounds[0]);
-      var dy = settings.layer.y - px(bounds[1]);
-      if (dx !== 0 || dy !== 0) resultLayer.translate(dx, dy);
-    } catch (translateError) {}
+    var bounds = resultLayer.bounds;
+    var dx = settings.layer.x - px(bounds[0]);
+    var dy = settings.layer.y - px(bounds[1]);
+    if (dx !== 0 || dy !== 0) resultLayer.translate(dx, dy);
 
     resultLayer.visible = true;
     send("assemble-progress", {
@@ -1430,9 +1515,27 @@ function commitPreviewEdits() {
   if (exportBtn) exportBtn.disabled = !components.length;
 
   if (components.length && state.embedded) {
+    // Persist full-document bboxes so a later Preview can restore them.
+    const aw = state.scan.analysisWidth || 1;
+    const ah = state.scan.analysisHeight || 1;
+    const fw = state.scan.width || aw;
+    const fh = state.scan.height || ah;
+    const fullComponents = components.map((component) => ({
+      ...component,
+      minX: Math.floor((component.minX * fw) / aw),
+      minY: Math.floor((component.minY * fh) / ah),
+      maxX: Math.max(
+        Math.floor((component.minX * fw) / aw),
+        Math.ceil(((component.maxX + 1) * fw) / aw) - 1,
+      ),
+      maxY: Math.max(
+        Math.floor((component.minY * fh) / ah),
+        Math.ceil(((component.maxY + 1) * fh) / ah) - 1,
+      ),
+    }));
     const data = DATA.buildSplitData({
       settings,
-      components,
+      components: fullComponents,
       meta: state.scan.meta || {},
       width: state.scan.width,
       height: state.scan.height,
@@ -1558,16 +1661,17 @@ async function placeNextAssembleLayer(requestId) {
     clearActiveRequest();
     state.stage = "complete";
     state.statusKind = "ok";
-    state.statusText = `Assembled ${job.layers.length} Smart Object${job.layers.length === 1 ? "" : "s"}.`;
+    state.statusText = `Assembled ${job.layers.length} Smart Object${job.layers.length === 1 ? "" : "s"} in “${job.groupName}”.`;
     state._assembleJob = null;
     render();
     return;
   }
 
   const layer = job.layers[job.index];
-  const isLast = job.index === job.layers.length - 1;
+  job.phase = "placing";
+  job.finishRetries = 0;
   setWorking(
-    "assembling",
+    "placing",
     `Assembling ${job.index + 1} / ${job.layers.length}: ${layer.name}`,
     requestId,
     "assemble",
@@ -1576,12 +1680,37 @@ async function placeNextAssembleLayer(requestId) {
   render();
 
   try {
+    postScript(makeAssembleOpenScript({ requestId, layer }));
+  } catch (error) {
+    failActiveRequest(error && error.message ? error.message : String(error));
+  }
+}
+
+function finishAssembleLayer(requestId) {
+  const job = state._assembleJob;
+  if (!job || state.activeRequestId !== requestId) return;
+  if (job.index >= job.layers.length) return;
+
+  const layer = job.layers[job.index];
+  const isLast = job.index === job.layers.length - 1;
+  job.phase = "finishing";
+  setWorking(
+    "finishing",
+    `Positioning ${job.index + 1} / ${job.layers.length}: ${layer.name}`,
+    requestId,
+    "assemble",
+    job.timeoutMs,
+  );
+  render();
+
+  try {
     postScript(
-      makeAssemblePlaceScript({
+      makeAssembleFinishScript({
         requestId,
         layer,
         index: job.index,
         total: job.layers.length,
+        groupId: job.groupId,
         groupName: job.groupName,
         isLast,
       }),
@@ -1672,13 +1801,28 @@ async function beginAssemble() {
 
     const prefix =
       (data.settings && data.settings.prefix) || state.prefix || "element";
+    const groupName = `${prefix}s`;
     state._assembleJob = {
       layers,
       index: 0,
-      groupName: `${prefix}s`,
+      groupName,
+      groupId: null,
       timeoutMs,
+      phase: "ensure",
+      finishRetries: 0,
     };
-    await placeNextAssembleLayer(requestId);
+
+    setWorking(
+      "ensuring group",
+      `Preparing group “${groupName}”…`,
+      requestId,
+      "assemble",
+      timeoutMs,
+    );
+    render();
+    postScript(
+      makeAssembleEnsureGroupScript({ requestId, groupName }),
+    );
   } catch (error) {
     failActiveRequest(error && error.message ? error.message : String(error));
   }
@@ -1701,6 +1845,35 @@ function yieldToUi() {
   return new Promise((resolve) => {
     window.setTimeout(resolve, 0);
   });
+}
+
+function pickStoredSplitData(meta, fullWidth, fullHeight) {
+  const candidates = [state.latestSplitData, state.folderData].filter(Boolean);
+  for (const data of candidates) {
+    const validation = DATA.validateSplitData(data);
+    if (!validation.ok || !data.elements || !data.elements.length) continue;
+    const docW = Number(data.document && data.document.width) || 0;
+    const docH = Number(data.document && data.document.height) || 0;
+    if (docW && docH && (docW !== fullWidth || docH !== fullHeight)) continue;
+    if (
+      meta &&
+      data.source &&
+      data.source.layerId != null &&
+      meta.layerId != null &&
+      Number(data.source.layerId) !== Number(meta.layerId)
+    ) {
+      // Same document size but different layer — still allow if names match loosely.
+      if (
+        data.source.layerName &&
+        meta.layerName &&
+        data.source.layerName !== meta.layerName
+      ) {
+        continue;
+      }
+    }
+    return data;
+  }
+  return null;
 }
 
 async function finishScanAnalysis(requestId, pngBuffer, meta) {
@@ -1728,22 +1901,61 @@ async function finishScanAnalysis(requestId, pngBuffer, meta) {
     const decoded = await decodePng(pngBuffer, META.previewMaxSide || 2048);
     if (state.activeRequestId !== requestId) return;
 
-    const labeled = CORE.labelComponents(
+    const opaque = CORE.buildOpaqueMaskFromImageData(
       decoded.imageData,
       settings.alphaThreshold,
-      settings.minSize,
-      settings.eightConnected,
+    );
+    const stored = pickStoredSplitData(
+      meta,
+      decoded.fullWidth,
+      decoded.fullHeight,
     );
 
-    const labelIds = labeled.components.map((component) => component.id);
+    let labels;
+    let components;
+    let restored = false;
+
+    if (stored) {
+      const painted = CORE.labelsFromElements(
+        decoded.imageData.width,
+        decoded.imageData.height,
+        opaque,
+        stored.elements,
+        Number(stored.document && stored.document.width) || decoded.fullWidth,
+        Number(stored.document && stored.document.height) || decoded.fullHeight,
+      );
+      if (painted.assigned > 0) {
+        labels = painted.labels;
+        components = CORE.buildComponentsFromLabels(
+          labels,
+          decoded.imageData.width,
+          decoded.imageData.height,
+          settings.minSize,
+        );
+        restored = components.length > 0;
+      }
+    }
+
+    if (!restored) {
+      const labeled = CORE.labelComponents(
+        decoded.imageData,
+        settings.alphaThreshold,
+        settings.minSize,
+        settings.eightConnected,
+      );
+      labels = labeled.labels;
+      components = labeled.components;
+    }
+
+    const labelIds = components.map((component) => component.id);
 
     state.sampledLabel = null;
     state.editTool = "sample";
     clearPreviewHover();
     state.scan = {
       imageData: decoded.imageData,
-      labels: labeled.labels,
-      components: labeled.components,
+      labels,
+      components,
       labelColors: CORE.createDefaultPalette(labelIds),
       labelsEdited: false,
       labelsCommitted: true,
@@ -1751,25 +1963,31 @@ async function finishScanAnalysis(requestId, pngBuffer, meta) {
       exportImageData: null,
       width: decoded.fullWidth,
       height: decoded.fullHeight,
-      analysisWidth: labeled.width,
-      analysisHeight: labeled.height,
+      analysisWidth: decoded.imageData.width,
+      analysisHeight: decoded.imageData.height,
       analysisScale: decoded.scale,
       pngBuffer,
       fullResReady: decoded.scale >= 0.999,
       meta,
       settings,
+      restoredFromData: restored,
     };
 
     clearActiveRequest();
     state.stage = "complete";
-    state.statusKind = labeled.components.length ? "ok" : "error";
+    state.statusKind = components.length ? "ok" : "error";
     const scaleNote =
       decoded.scale < 0.999
         ? " Preview used a downscaled pass; Export rebuilds at full resolution."
         : "";
-    state.statusText = labeled.components.length
-      ? `Preview ready: ${labeled.components.length} separate element${labeled.components.length === 1 ? "" : "s"} detected.${scaleNote}`
-      : "No elements matched your thresholds. Lower alpha threshold or min pixels.";
+    if (!components.length) {
+      state.statusText =
+        "No elements matched your thresholds. Lower alpha threshold or min pixels.";
+    } else if (restored) {
+      state.statusText = `Restored ${components.length} element${components.length === 1 ? "" : "s"} from Alpha Split data.${scaleNote}`;
+    } else {
+      state.statusText = `Preview ready: ${components.length} separate element${components.length === 1 ? "" : "s"} detected.${scaleNote}`;
+    }
     render();
   } catch (error) {
     failActiveRequest(error && error.message ? error.message : String(error));
@@ -2189,7 +2407,26 @@ function closeTemporaryAndAnalyze(requestId, pngBuffer) {
 }
 
 function handleDone() {
-  if (!state.activeRequestId || state.activeOperation !== "scan") return;
+  if (!state.activeRequestId) return;
+
+  if (state.activeOperation === "assemble") {
+    const job = state._assembleJob;
+    if (job && state.stage === "placing" && job.phase === "placing") {
+      // Give Photopea a beat to finish inserting the Smart Object after open.
+      window.setTimeout(() => {
+        if (
+          state.activeRequestId &&
+          state.activeOperation === "assemble" &&
+          state.stage === "placing"
+        ) {
+          finishAssembleLayer(state.activeRequestId);
+        }
+      }, 120);
+    }
+    return;
+  }
+
+  if (state.activeOperation !== "scan") return;
 
   if (state.stage === "receiving snapshot") {
     // Capture script sends: meta echo → PSD ArrayBuffer → "done" (order can vary slightly).
@@ -2257,7 +2494,38 @@ function handleTaggedMessage(payload) {
     return;
   }
 
+  if (payload.type === "assemble-group") {
+    if (!payload.ok) {
+      failActiveRequest(payload.message || "Could not create the assemble group.");
+      return;
+    }
+    if (!state._assembleJob) return;
+    state._assembleJob.groupId = payload.groupId;
+    placeNextAssembleLayer(payload.requestId);
+    return;
+  }
+
   if (payload.type === "assemble-progress") {
+    if (payload.notReady) {
+      const job = state._assembleJob;
+      if (!job) return;
+      job.finishRetries = (job.finishRetries || 0) + 1;
+      if (job.finishRetries > 8) {
+        failActiveRequest(
+          payload.message || "Smart Object did not finish loading in time.",
+        );
+        return;
+      }
+      window.setTimeout(() => {
+        if (
+          state.activeRequestId === payload.requestId &&
+          state.activeOperation === "assemble"
+        ) {
+          finishAssembleLayer(payload.requestId);
+        }
+      }, 150 + job.finishRetries * 50);
+      return;
+    }
     if (!payload.ok) {
       failActiveRequest(payload.message || "Could not assemble a layer.");
       return;
@@ -2268,7 +2536,7 @@ function handleTaggedMessage(payload) {
       clearActiveRequest();
       state.stage = "complete";
       state.statusKind = "ok";
-      state.statusText = `Assembled ${payload.total} Smart Object${payload.total === 1 ? "" : "s"}.`;
+      state.statusText = `Assembled ${payload.total} Smart Object${payload.total === 1 ? "" : "s"} in “${state._assembleJob.groupName}”.`;
       state._assembleJob = null;
       render();
       return;
