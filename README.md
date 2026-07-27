@@ -2,14 +2,14 @@
 
 A lightweight, client-side Photopea sidebar plugin that detects disconnected
 opaque regions through the alpha channel, lets you fix the detection in an
-interactive ID mask, exports each region as a cropped PNG, and can reassemble
-those PNGs as Smart Objects.
+interactive ID mask, exports each region as a cropped PNG, and can reimport and
+position those PNGs as Smart Objects.
 
-**Current version:** v1.3.4  
+**Current version:** v1.3.5  
 **Compatibility:** Tested with Photopea 5.6 · scripting v30  
 **Last verified:** 28 July 2026
 
-**Live plugin:** [chaxic.github.io/photopea-alpha-split](https://chaxic.github.io/photopea-alpha-split/?v=1.3.4)
+**Live plugin:** [chaxic.github.io/photopea-alpha-split](https://chaxic.github.io/photopea-alpha-split/?v=1.3.5)
 
 ## Features
 
@@ -23,8 +23,7 @@ those PNGs as Smart Objects.
 - Dual metadata: hidden `AlphaSplit Data` PSD layer + `alpha-split-data.json`
 - **Generate ID Mask** for a fresh detect; **Restore ID Mask** rematches stored boxes
 - Instant schematic layout when data loads; **Load data layer** / **Load data file**
-- **Assemble Elements** imports all folder PNGs, then positions them in one batch
-- Workfile-safe capture via an independent temporary PSD snapshot
+- **Import Elements** places folder PNGs; **Position Elements** places them from stored boxes
 - Responsive preview canvas that scales with the panel width
 - No server, account, or document upload
 
@@ -32,18 +31,18 @@ those PNGs as Smart Objects.
 
 ### Public GitHub Pages
 
-1. Open the [installer page](https://chaxic.github.io/photopea-alpha-split/?v=1.3.4).
+1. Open the [installer page](https://chaxic.github.io/photopea-alpha-split/?v=1.3.5).
 2. Download `alpha-split-photopea.json`.
 3. In Photopea, open **Window → Plugins → Add Plugin**.
 4. Select the downloaded JSON file.
-5. Open the panel and confirm the badge shows **v1.3.4**.
+5. Open the panel and confirm the badge shows **v1.3.5**.
 
 ### Local development
 
 1. Run `npm run dev` (serves at `http://127.0.0.1:4178`).
 2. In Photopea, open **Window → Plugins → Add Plugin**.
 3. Select `plugin.local.json` from this folder.
-4. Confirm the panel shows **v1.3.4** and the α icon.
+4. Confirm the panel shows **v1.3.5** and the α icon.
 
 ## Use
 
@@ -51,16 +50,31 @@ those PNGs as Smart Objects.
 2. Choose **Generate ID Mask** for a fresh detect, or **Restore ID Mask** when
    Alpha Split data is loaded (auto from the document/folder, or via
    **Load data layer** / **Load data file**). Restore rematches real alpha
-   shapes to stored element boxes.
+   shapes to stored element boxes and skips the slow PSD snapshot.
 3. Optionally edit the mask (Sample / Fill / New / Update).
 4. Choose a destination (**Folder** or **ZIP**) and **Export elements**.
 5. Export writes PNGs plus `alpha-split-data.json`, and upserts a hidden
    `AlphaSplit Data` text layer in the PSD.
-6. With Folder destination and a prior export, choose **Assemble Elements** to
-   import each PNG as a Smart Object, then position them all into one `{prefix}s`
-   group at their saved bbox origins.
+6. With Folder destination and a prior export, choose **Import Elements** to
+   place each PNG as a Smart Object named after its file (`element_01`), then
+   **Position Elements** to move them into one `{prefix}s` group at their
+   stored positions.
 
-Assemble intentionally modifies the document. ID Mask capture remains workfile-safe.
+Import and Position both modify the document. ID Mask capture leaves the layer
+stack unchanged.
+
+### How positions are stored
+
+Each entry in `alpha-split-data.json` (and the `AlphaSplit Data` layer) records
+the element's bounding box in full document pixels:
+
+```json
+{ "id": 1, "filename": "element_01.png", "x": 120, "y": 64, "width": 96, "height": 80 }
+```
+
+**Position Elements** matches `filename` (without `.png`) to the layer name and
+translates the layer so its top-left corner sits at `x`, `y`. Layers still named
+`image`, or renamed by hand, are reported as missing.
 
 ## Development
 

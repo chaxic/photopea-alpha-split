@@ -138,7 +138,8 @@ test("installer page loads zip-util and export wording", () => {
   const app = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
   const dataUtil = fs.readFileSync(path.join(__dirname, "..", "data-util.js"), "utf8");
   assert.match(app, /Export elements/);
-  assert.match(app, /Assemble Elements/);
+  assert.match(app, /Import Elements/);
+  assert.match(app, /Position Elements/);
   assert.match(app, /DATA\.DATA_FILENAME|alpha-split-data\.json/);
   assert.match(dataUtil, /AlphaSplit Data/);
   assert.match(dataUtil, /alpha-split-data\.json/);
@@ -161,25 +162,50 @@ test("data-layer traffic never occupies the blocking request slot", () => {
   assert.doesNotMatch(app, /await requestDataLayerRead\(\);\s*\n\s*if \(layerData\)/);
 });
 
-test("assemble uses import-all then batch position", () => {
+test("Import and Position are separate operations", () => {
   const app = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
-  assert.match(app, /makeAssembleOpenScript/);
-  assert.match(app, /makeAssembleCaptureScript/);
-  assert.match(app, /makeAssembleBatchFinishScript/);
-  assert.match(app, /makeAssembleEnsureGroupScript/);
-  assert.doesNotMatch(app, /makeAssemblePlaceScript/);
-  assert.doesNotMatch(app, /makeAssembleFinishScript/);
-  assert.match(app, /awaitingOpenDone/);
-  assert.match(app, /awaitingBatchDone/);
+  assert.match(app, /makeImportEnsureGroupScript/);
+  assert.match(app, /makeImportOpenScript/);
+  assert.match(app, /makeImportCaptureScript/);
+  assert.match(app, /makePositionByNameScript/);
+  assert.match(app, /beginImportElements/);
+  assert.match(app, /beginPositionElements/);
+  assert.match(app, /data-run="import-elements"/);
+  assert.match(app, /data-run="position-elements"/);
+  // The combined Assemble action and its id-keyed batch step are gone.
+  assert.doesNotMatch(app, /beginAssemble/);
+  assert.doesNotMatch(app, /makeAssembleBatchFinishScript/);
+  assert.doesNotMatch(app, /data-run="assemble"/);
+  // Import claims the new "image" layer and must verify the rename.
   assert.match(app, /knownLayerIds/);
   assert.match(app, /findNewImageLayer|name === "image"/);
+  assert.match(app, /renamed = String\(resultLayer\.name\) === expected/);
+  assert.match(app, /awaitingOpenDone/);
   assert.match(app, /matchComponentsToElements|CORE\.matchComponentsToElements/);
-  assert.match(app, /Restored \$\{components\.length\}|Restored \$\{.*\} element/);
-  // Last capture "done" must not complete Assemble — only assemble-batch.
-  assert.match(
-    app,
-    /Never complete Assemble from Photopea "done"|only assemble-batch may finish/,
-  );
+});
+
+test("Position matches layers by name and uses stored bbox origins", () => {
+  const app = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
+  assert.match(app, /findArtLayerByName\(documentRef, item\.name\)/);
+  assert.match(app, /item\.x - px\(bounds\[0\]\)/);
+  assert.match(app, /item\.y - px\(bounds\[1\]\)/);
+  assert.match(app, /elementLayerName/);
+  assert.match(app, /position-done/);
+  // Position must not depend on ids recorded during import.
+  assert.doesNotMatch(app, /findLayerById\(documentRef, item\.layerId\)/);
+});
+
+test("Restore ID Mask skips the PSD snapshot round trip", () => {
+  const app = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
+  assert.match(app, /makeLightCaptureScript/);
+  // Restore exports the isolated layer straight from the workfile...
+  assert.match(app, /restoreMode\s*\n?\s*\?\s*makeLightCaptureScript/);
+  // ...and puts the layer visibility back afterwards.
+  assert.match(app, /collectVisibility/);
+  assert.match(app, /restoreVisibility/);
+  // Generate keeps the workfile-safe PSD snapshot.
+  assert.match(app, /saveToOE\("psd"\)/);
+  assert.match(app, /exporting the layer/);
 });
 
 test("Generate and Restore ID Mask replace Preview", () => {
@@ -312,6 +338,35 @@ test("validateSplitData rejects bad payloads", () => {
       plugin: "alpha-split",
       settings: {},
       elements: [{ filename: "a.png" }],
+    }).ok,
+    false,
+  );
+});
+
+test("validateSplitData requires a full bounding box per element", () => {
+  const base = {
+    version: 1,
+    plugin: "alpha-split",
+    settings: { prefix: "element" },
+  };
+  assert.equal(
+    data.validateSplitData({
+      ...base,
+      elements: [{ filename: "a.png", x: 1, y: 2, width: 3, height: 4 }],
+    }).ok,
+    true,
+  );
+  assert.equal(
+    data.validateSplitData({
+      ...base,
+      elements: [{ filename: "a.png", x: 1, y: 2 }],
+    }).ok,
+    false,
+  );
+  assert.equal(
+    data.validateSplitData({
+      ...base,
+      elements: [{ filename: "a.png", x: 1, y: 2, width: 0, height: 4 }],
     }).ok,
     false,
   );

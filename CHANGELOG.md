@@ -2,6 +2,30 @@
 
 All notable changes to Alpha Split for Photopea are documented here.
 
+## [1.3.5] - 2026-07-28
+
+### Changed
+
+- **Assemble Elements** is now **Import Elements** and **Position Elements**.
+  Import places and names each PNG; Position matches layers by name and moves
+  them to the bounding-box origins stored in `alpha-split-data.json`, so a
+  dropped message can no longer leave elements unpositioned.
+- **Restore ID Mask** exports the isolated active layer straight from the
+  workfile instead of taking a full PSD snapshot, which removes the slow
+  snapshot/temp-document round trip on large sheets. Layer visibility is put
+  back in the same script. Generate ID Mask keeps the PSD snapshot path.
+
+### Fixed
+
+- Import verifies the rename to `element_NN` and fails loudly instead of
+  leaving Smart Objects named `image`.
+- Data files are rejected when an element is missing its bounding-box size, so
+  Position always has both an origin and a size to work from.
+
+### Verification
+
+- Automated checks passed on 28 July 2026.
+
 ## [1.3.4] - 2026-07-28
 
 ### Fixed

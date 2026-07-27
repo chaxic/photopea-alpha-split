@@ -87,11 +87,23 @@
       if (!element || !element.filename) {
         return { ok: false, message: "Data file has an invalid element entry." };
       }
+      // Import names layers from filename; Position needs the full bounding box.
       if (
         !Number.isFinite(Number(element.x)) ||
         !Number.isFinite(Number(element.y))
       ) {
         return { ok: false, message: "Data file has an element without position." };
+      }
+      if (
+        !Number.isFinite(Number(element.width)) ||
+        !Number.isFinite(Number(element.height)) ||
+        Number(element.width) < 1 ||
+        Number(element.height) < 1
+      ) {
+        return {
+          ok: false,
+          message: "Data file has an element without a bounding box size.",
+        };
       }
     }
     return { ok: true };
