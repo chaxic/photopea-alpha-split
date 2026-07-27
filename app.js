@@ -35,6 +35,8 @@ const state = {
   pickerWindow: null,
   editTool: "sample",
   sampledLabel: null,
+  previewHover: null,
+  previewHoverRaf: null,
   stage: "idle",
   statusKind: "idle",
   statusText: "",
@@ -171,7 +173,7 @@ function sampleIndicatorHtml() {
         state.scan.labelColors &&
         state.scan.labelColors.get(state.sampledLabel)) ||
       [120, 120, 120];
-    return `<span class="sample-swatch" style="background:rgb(${color[0]},${color[1]},${color[2]})" aria-hidden="true"></span><span>Sample: ${escapeHtml(state.prefix)}_${padNumber(state.sampledLabel, 2)}</span>`;
+    return `<span class="sample-swatch" style="background:rgb(${color[0]},${color[1]},${color[2]})" aria-hidden="true"></span><span>Sample: ${escapeHtml(elementTitle(state.sampledLabel))}</span>`;
   }
   return `<span class="sample-swatch sample-swatch-empty" aria-hidden="true"></span><span>Sample: None</span>`;
 }
@@ -273,6 +275,7 @@ function panelHtml() {
           ${previewToolbarHtml(disabled)}
           <div class="preview-card${state.scan ? " show" : ""}" id="preview-card">
             <canvas id="preview-canvas" aria-label="Detected elements preview"></canvas>
+            <div id="preview-hover-tip" class="preview-hover-tip" hidden></div>
           </div>
           <p class="preview-meta" id="preview-meta">
             ${
@@ -868,6 +871,74 @@ function decodePng(buffer, maxSide) {
   });
 }
 
+function elementTitle(labelId) {
+  return `${state.prefix}_${padNumber(labelId, 2)}`;
+}
+
+function labelColor(scan, labelId) {
+  return (
+    (scan.labelColors && scan.labelColors.get(labelId)) || [76, 139, 245]
+  );
+}
+
+function clearPreviewHover() {
+  state.previewHover = null;
+  const tip = document.querySelector("#preview-hover-tip");
+  if (tip) tip.hidden = true;
+}
+
+function updatePreviewHoverTip(hover, card) {
+  const tip = document.querySelector("#preview-hover-tip");
+  if (!tip || !hover || !state.scan) {
+    if (tip) tip.hidden = true;
+    return;
+  }
+  const color = labelColor(state.scan, hover.label);
+  tip.hidden = false;
+  tip.innerHTML = `<span class="sample-swatch" style="background:rgb(${color[0]},${color[1]},${color[2]})" aria-hidden="true"></span><span>${escapeHtml(elementTitle(hover.label))}</span>`;
+  const cardRect = card.getBoundingClientRect();
+  const tipWidth = tip.offsetWidth || 120;
+  const tipHeight = tip.offsetHeight || 24;
+  let left = hover.tipX + 10;
+  let top = hover.tipY + 10;
+  left = Math.max(4, Math.min(left, cardRect.width - tipWidth - 4));
+  top = Math.max(4, Math.min(top, cardRect.height - tipHeight - 4));
+  tip.style.left = `${left}px`;
+  tip.style.top = `${top}px`;
+}
+
+function drawIslandOutline(ctx, islandMask, analysisW, analysisH, scale, dw, dh) {
+  const imageData = ctx.getImageData(0, 0, dw, dh);
+  const dst = imageData.data;
+  const isEdge = (sx, sy) => {
+    const idx = sy * analysisW + sx;
+    if (!islandMask[idx]) return false;
+    if (sx === 0 || sy === 0 || sx === analysisW - 1 || sy === analysisH - 1) {
+      return true;
+    }
+    return (
+      !islandMask[idx - 1] ||
+      !islandMask[idx + 1] ||
+      !islandMask[idx - analysisW] ||
+      !islandMask[idx + analysisW]
+    );
+  };
+
+  for (let py = 0; py < dh; py++) {
+    const srcY = Math.min(analysisH - 1, Math.floor(py / scale));
+    for (let pxCol = 0; pxCol < dw; pxCol++) {
+      const srcX = Math.min(analysisW - 1, Math.floor(pxCol / scale));
+      if (!isEdge(srcX, srcY)) continue;
+      const dstOffset = (py * dw + pxCol) << 2;
+      dst[dstOffset] = 255;
+      dst[dstOffset + 1] = 255;
+      dst[dstOffset + 2] = 255;
+      dst[dstOffset + 3] = 255;
+    }
+  }
+  ctx.putImageData(imageData, 0, 0);
+}
+
 function drawPreview(scan) {
   const canvas = document.querySelector("#preview-canvas");
   const card = document.querySelector("#preview-card");
@@ -893,8 +964,6 @@ function drawPreview(scan) {
   const src = imageData.data;
   const dst = out.data;
   const colors = scan.labelColors;
-  const highlightId =
-    typeof state.sampledLabel === "number" ? state.sampledLabel : -1;
 
   for (let py = 0; py < dh; py++) {
     const srcY = Math.min(height - 1, Math.floor(py / scale));
@@ -911,24 +980,35 @@ function drawPreview(scan) {
         dst[dstOffset + 3] = Math.min(src[srcOffset + 3], 60);
         continue;
       }
-      const color =
-        (colors && colors.get(id)) || [76, 139, 245];
-      let r = (src[srcOffset] + color[0]) >> 1;
-      let g = (src[srcOffset + 1] + color[1]) >> 1;
-      let b = (src[srcOffset + 2] + color[2]) >> 1;
-      if (id === highlightId) {
-        r = Math.min(255, r + 40);
-        g = Math.min(255, g + 40);
-        b = Math.min(255, b + 40);
-      }
-      dst[dstOffset] = r;
-      dst[dstOffset + 1] = g;
-      dst[dstOffset + 2] = b;
+      const color = (colors && colors.get(id)) || [76, 139, 245];
+      dst[dstOffset] = (src[srcOffset] + color[0]) >> 1;
+      dst[dstOffset + 1] = (src[srcOffset + 1] + color[1]) >> 1;
+      dst[dstOffset + 2] = (src[srcOffset + 2] + color[2]) >> 1;
       dst[dstOffset + 3] = Math.max(src[srcOffset + 3], 180);
     }
   }
 
   ctx.putImageData(out, 0, 0);
+
+  if (
+    state.editTool === "fill" &&
+    state.previewHover &&
+    state.previewHover.islandMask
+  ) {
+    drawIslandOutline(
+      ctx,
+      state.previewHover.islandMask,
+      width,
+      height,
+      scale,
+      dw,
+      dh,
+    );
+  }
+
+  if (state.previewHover && card) {
+    updatePreviewHoverTip(state.previewHover, card);
+  }
 }
 
 function updatePreviewChrome() {
@@ -991,6 +1071,73 @@ function canvasToAnalysisCoords(event, canvas, scan) {
   return { x: ax, y: ay };
 }
 
+function handlePreviewMouseMove(event) {
+  const scan = state.scan;
+  const canvas = document.querySelector("#preview-canvas");
+  const card = document.querySelector("#preview-card");
+  if (!scan || !canvas || !card || state.statusKind === "working") return;
+
+  const coords = canvasToAnalysisCoords(event, canvas, scan);
+  if (!coords) {
+    clearPreviewHover();
+    drawPreview(scan);
+    return;
+  }
+
+  const label = scan.labels[coords.y * scan.analysisWidth + coords.x];
+  if (!label) {
+    clearPreviewHover();
+    drawPreview(scan);
+    return;
+  }
+
+  const cardRect = card.getBoundingClientRect();
+  const hover = {
+    ax: coords.x,
+    ay: coords.y,
+    label,
+    tipX: event.clientX - cardRect.left,
+    tipY: event.clientY - cardRect.top,
+    islandMask: null,
+  };
+
+  if (state.editTool === "fill") {
+    const island = CORE.floodIsland(
+      scan.labels,
+      scan.analysisWidth,
+      scan.analysisHeight,
+      coords.x,
+      coords.y,
+      state.eightConnected,
+    );
+    hover.islandMask = island.mask;
+  }
+
+  state.previewHover = hover;
+  drawPreview(scan);
+}
+
+function schedulePreviewHover(event) {
+  state.pendingHoverEvent = event;
+  if (state.previewHoverRaf !== null) return;
+  state.previewHoverRaf = window.requestAnimationFrame(() => {
+    state.previewHoverRaf = null;
+    const pending = state.pendingHoverEvent;
+    state.pendingHoverEvent = null;
+    if (pending) handlePreviewMouseMove(pending);
+  });
+}
+
+function handlePreviewMouseLeave() {
+  if (state.previewHoverRaf !== null) {
+    window.cancelAnimationFrame(state.previewHoverRaf);
+    state.previewHoverRaf = null;
+  }
+  state.pendingHoverEvent = null;
+  clearPreviewHover();
+  if (state.scan) drawPreview(state.scan);
+}
+
 function handlePreviewClick(event) {
   const scan = state.scan;
   const canvas = document.querySelector("#preview-canvas");
@@ -1004,7 +1151,6 @@ function handlePreviewClick(event) {
   if (state.editTool === "sample") {
     state.sampledLabel = label;
     updatePreviewChrome();
-    drawPreview(scan);
     return;
   }
 
@@ -1129,6 +1275,7 @@ async function finishScanAnalysis(requestId, pngBuffer, meta) {
 
     state.sampledLabel = null;
     state.editTool = "sample";
+    clearPreviewHover();
     state.scan = {
       imageData: decoded.imageData,
       labels: labeled.labels,
@@ -1691,19 +1838,24 @@ function bindEvents() {
       }
       if (action === "sample") {
         state.editTool = "sample";
+        clearPreviewHover();
         updatePreviewChrome();
+        if (state.scan) drawPreview(state.scan);
         return;
       }
       if (action === "fill") {
         state.editTool = "fill";
+        clearPreviewHover();
         updatePreviewChrome();
+        if (state.scan) drawPreview(state.scan);
         return;
       }
       if (action === "sample-new") {
         state.sampledLabel = "new";
         state.editTool = "fill";
+        clearPreviewHover();
         updatePreviewChrome();
-        drawPreview(state.scan);
+        if (state.scan) drawPreview(state.scan);
         return;
       }
       if (action === "update") {
@@ -1715,6 +1867,12 @@ function bindEvents() {
   document
     .querySelector("#preview-canvas")
     ?.addEventListener("click", handlePreviewClick);
+  document
+    .querySelector("#preview-canvas")
+    ?.addEventListener("mousemove", schedulePreviewHover);
+  document
+    .querySelector("#preview-canvas")
+    ?.addEventListener("mouseleave", handlePreviewMouseLeave);
 
   document.querySelectorAll(".panel-body input").forEach((input) => {
     input.addEventListener("input", () => {

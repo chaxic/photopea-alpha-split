@@ -2,6 +2,14 @@
 
 All notable changes to Alpha Split for Photopea are documented here.
 
+## [1.2.1] - 2026-07-27
+
+### Fixed
+
+- Sampling no longer tints the whole element on the canvas.
+- Hover tooltip now shows element name and colour swatch.
+- Fill mode previews the target island with a white outline before click.
+
 ## [1.2.0] - 2026-07-27
 
 ### Added

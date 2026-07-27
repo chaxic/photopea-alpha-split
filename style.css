@@ -418,6 +418,7 @@ button:disabled, input:disabled { cursor: wait; opacity: .62; }
   text-transform: uppercase;
 }
 .preview-card {
+  position: relative;
   display: none;
   flex: 1 1 auto;
   min-height: 120px;
@@ -446,6 +447,31 @@ button:disabled, input:disabled { cursor: wait; opacity: .62; }
   max-height: 100%;
   object-fit: contain;
   cursor: crosshair;
+}
+.preview-hover-tip {
+  position: absolute;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border: 1px solid #5a5a5a;
+  border-radius: 5px;
+  background: rgb(20 20 20 / 92%);
+  box-shadow: 0 4px 14px rgb(0 0 0 / 35%);
+  color: #ebebeb;
+  font-size: 10px;
+  font-weight: 600;
+  pointer-events: none;
+  white-space: nowrap;
+}
+.preview-hover-tip[hidden] {
+  display: none !important;
+}
+.preview-hover-tip .sample-swatch {
+  width: 10px;
+  height: 10px;
+  flex: 0 0 10px;
 }
 .preview-meta {
   margin: 6px 0 0;
