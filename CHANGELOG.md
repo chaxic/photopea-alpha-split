@@ -2,6 +2,25 @@
 
 All notable changes to Alpha Split for Photopea are documented here.
 
+## [1.1.0] - 2026-07-27
+
+### Changed
+
+- Replaced in-document **Split into layers** with **Export elements**.
+- Cropped PNGs are encoded entirely in the panel and written to a chosen folder
+  or downloaded as a ZIP — no Photopea place round-trips.
+- Removed “Put results in a group” and “Hide source layer” options.
+
+### Added
+
+- Folder destination with remembered directory handle (IndexedDB) and a secure
+  picker window for Photopea’s cross-origin iframe.
+- ZIP download destination as a reliable fallback.
+
+### Verification
+
+- Automated checks passed on 27 July 2026.
+
 ## [1.0.3] - 2026-07-27
 
 ### Changed

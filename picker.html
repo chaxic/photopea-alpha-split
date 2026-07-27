@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Choose a local destination for the Alpha Split Photopea plugin."
+    />
+    <title>Choose export folder</title>
+    <link rel="icon" href="./assets/icon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="./style.css?v=1.1.0" />
+    <script src="./picker.js?v=1.1.0" defer></script>
+  </head>
+  <body class="picker-page">
+    <main class="picker-card">
+      <div class="picker-icon" aria-hidden="true">
+        <svg viewBox="0 0 48 48">
+          <path d="M5.5 14.5h14l4 5h19v19h-37z"></path>
+          <path d="M9.5 10h12l4 4"></path>
+          <path d="M24 25v9m0 0-4-4m4 4 4-4"></path>
+        </svg>
+      </div>
+      <p class="eyebrow">Alpha Split</p>
+      <h1 id="picker-title">Choose an export folder</h1>
+      <p id="picker-copy" class="picker-copy">
+        Photopea cannot write next to your PSD automatically. Choose a folder
+        once and this browser can remember it for future exports.
+      </p>
+      <button id="choose-folder" class="download-button" type="button">
+        Choose folder
+      </button>
+      <p id="picker-status" class="picker-status" role="status" aria-live="polite">
+        Your files stay on this device.
+      </p>
+    </main>
+  </body>
+</html>

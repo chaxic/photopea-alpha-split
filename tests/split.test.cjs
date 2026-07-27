@@ -7,6 +7,7 @@ const path = require("node:path");
 
 const core = require("../split-core.js");
 const meta = require("../meta.js");
+const zip = require("../zip-util.js");
 
 function makeImageData(width, height, rects) {
   const data = new Uint8ClampedArray(width * height * 4);
@@ -116,4 +117,24 @@ test("version is consistent across package and meta", () => {
   );
   assert.equal(pkg.version, meta.version);
   assert.equal(meta.pluginUrl, "https://chaxic.github.io/photopea-alpha-split/");
+});
+
+test("stored ZIP starts with a local file header", async () => {
+  const payload = new TextEncoder().encode("hello");
+  const blob = zip.createStoredZip([{ name: "hello.txt", data: payload }]);
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  assert.equal(bytes[0], 0x50);
+  assert.equal(bytes[1], 0x4b);
+  assert.equal(bytes[2], 0x03);
+  assert.equal(bytes[3], 0x04);
+  assert.ok(bytes.length > 30 + "hello.txt".length + payload.length);
+});
+
+test("installer page loads zip-util and export wording", () => {
+  const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
+  assert.match(html, /zip-util\.js\?v=/);
+  const app = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
+  assert.match(app, /Export elements/);
+  assert.doesNotMatch(app, /Split into layers/);
+  assert.doesNotMatch(app, /makePlaceLayerScript/);
 });

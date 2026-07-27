@@ -2,10 +2,17 @@
 
 const META = window.ALPHA_SPLIT_META;
 const CORE = window.AlphaSplitCore;
+const ZIP = window.AlphaSplitZip;
 const RESULT_PREFIX = "ALPHA_SPLIT_RESULT::";
 const MESSAGE_PREFIX = "ALPHA_SPLIT::";
+const READY_MESSAGE = "ALPHA_SPLIT_DIRECTORY_READY";
+const CANCEL_MESSAGE = "ALPHA_SPLIT_DIRECTORY_CANCELLED";
+const DB_NAME = "photopea-alpha-split";
+const DB_VERSION = 1;
+const STORE_NAME = "handles";
+const DIRECTORY_KEY = "export-directory";
 
-if (!META || !CORE) {
+if (!META || !CORE || !ZIP) {
   const root = document.querySelector("#app");
   if (root) {
     root.textContent =
@@ -20,8 +27,12 @@ const state = {
   minSize: 32,
   prefix: "element",
   eightConnected: true,
-  hideSource: true,
-  groupLayers: true,
+  destination: "folder",
+  folderHandle: null,
+  folderName: "",
+  folderPermission: "none",
+  exportAfterFolderChoice: false,
+  pickerWindow: null,
   stage: "idle",
   statusKind: "idle",
   statusText: "",
@@ -84,16 +95,74 @@ function settingsFromState() {
     minSize: Number(state.minSize) || 1,
     prefix: String(state.prefix || "element").trim() || "element",
     eightConnected: !!state.eightConnected,
-    hideSource: !!state.hideSource,
-    groupLayers: !!state.groupLayers,
   };
+}
+
+function folderIcon() {
+  return `
+    <svg viewBox="0 0 20 20" aria-hidden="true">
+      <path d="M2.8 5.5h6l1.6 2h6.8v8H2.8z"></path>
+      <path d="M5 12h10"></path>
+    </svg>`;
+}
+
+function zipIcon() {
+  return `
+    <svg viewBox="0 0 20 20" aria-hidden="true">
+      <path d="M5 2.8h7l3 3v11.4H5z"></path>
+      <path d="M12 2.8v3h3M8.5 5h2M8.5 8h2M8.5 11h2M8.5 14h2"></path>
+    </svg>`;
+}
+
+function destinationHtml(disabled) {
+  const folderSelected = state.destination === "folder" ? " selected" : "";
+  const zipSelected = state.destination === "zip" ? " selected" : "";
+
+  let folderBody;
+  if (state.destination === "zip") {
+    folderBody = `
+      <div class="destination-card">
+        <div class="destination-icon">${zipIcon()}</div>
+        <div class="destination-copy">
+          <strong>ZIP download</strong>
+          <span>One archive with every cropped PNG</span>
+        </div>
+      </div>`;
+  } else {
+    const title = state.folderName || "Export folder not selected";
+    let subtitle = "Choose where PNG files will be written";
+    if (state.folderPermission === "granted") {
+      subtitle = "Remembered by this browser";
+    } else if (state.folderName) {
+      subtitle = "Access will be restored in a secure folder window";
+    }
+    folderBody = `
+      <div class="destination-card">
+        <div class="destination-icon">${folderIcon()}</div>
+        <div class="destination-copy">
+          <strong title="${escapeHtml(title)}">${escapeHtml(title)}</strong>
+          <span>${escapeHtml(subtitle)}</span>
+        </div>
+        <button class="small-button" id="choose-folder" type="button"${disabled}>
+          ${state.folderName ? "Change" : "Choose"}
+        </button>
+      </div>`;
+  }
+
+  return `
+    <p class="section-label">Destination</p>
+    <div class="destination-toggle" role="group" aria-label="Export destination">
+      <button type="button" class="destination-option${folderSelected}" data-destination="folder"${disabled}>Folder</button>
+      <button type="button" class="destination-option${zipSelected}" data-destination="zip"${disabled}>ZIP</button>
+    </div>
+    ${folderBody}`;
 }
 
 function panelHtml() {
   const busy = state.statusKind === "working";
   const disabled = busy ? " disabled" : "";
-  const canSplit = !busy && state.scan && state.scan.components.length > 0;
-  const splitDisabled = canSplit ? "" : " disabled";
+  const canExport = !busy && state.scan && state.scan.components.length > 0;
+  const exportDisabled = canExport ? "" : " disabled";
   const count = state.scan ? state.scan.components.length : 0;
 
   return `
@@ -105,7 +174,7 @@ function panelHtml() {
             <h1>${escapeHtml(META.name)}</h1>
             <span class="version-badge">v${escapeHtml(META.version)}</span>
           </div>
-          <p>Split by alpha regions</p>
+          <p>Export by alpha regions</p>
         </div>
       </header>
 
@@ -122,7 +191,7 @@ function panelHtml() {
         </div>
 
         <label class="stacked-field">
-          <span>Layer name prefix</span>
+          <span>File name prefix</span>
           <input id="prefix" value="${escapeHtml(state.prefix)}" placeholder="element"${disabled} />
         </label>
 
@@ -131,15 +200,9 @@ function panelHtml() {
             <input id="eight" type="checkbox" ${state.eightConnected ? "checked" : ""}${disabled} />
             <span>8-connected (diagonals count)</span>
           </label>
-          <label class="check-label">
-            <input id="hide-source" type="checkbox" ${state.hideSource ? "checked" : ""}${disabled} />
-            <span>Hide source layer after split</span>
-          </label>
-          <label class="check-label">
-            <input id="group-layers" type="checkbox" ${state.groupLayers ? "checked" : ""}${disabled} />
-            <span>Put results in a group</span>
-          </label>
         </div>
+
+        ${destinationHtml(disabled)}
 
         <div class="preview-wrap${state.scan ? " show" : ""}" id="preview-wrap">
           <div class="preview-title-row">
@@ -156,7 +219,7 @@ function panelHtml() {
           <p class="preview-meta" id="preview-meta">
             ${
               state.scan
-                ? `Colored regions show what will become separate layers · ${state.scan.width}×${state.scan.height}${
+                ? `Colored regions show what will be exported · ${state.scan.width}×${state.scan.height}${
                     state.scan.analysisScale < 0.999
                       ? ` · preview @ ${state.scan.analysisWidth}×${state.scan.analysisHeight}`
                       : ""
@@ -173,7 +236,7 @@ function panelHtml() {
           </div>
           <div class="action-row">
             <button class="secondary" type="button" data-run="scan"${disabled}>Preview</button>
-            <button class="primary" type="button" data-run="split"${splitDisabled}>Split into layers</button>
+            <button class="primary" type="button" data-run="export"${exportDisabled}>Export elements</button>
           </div>
         </div>
       </div>
@@ -181,7 +244,7 @@ function panelHtml() {
       <footer class="panel-footer">
         <div class="panel-footer-copy">
           <span>Tested with Photopea ${escapeHtml(META.testedPhotopea)} · scripting v${escapeHtml(META.scriptingVersion)}</span>
-          <span>Scan is read-only · Split creates new layers</span>
+          <span>Preview is read-only · Export writes PNG files</span>
         </div>
         <a href="${META.repositoryUrl}" target="_blank" rel="noreferrer" title="View the Alpha Split source code on GitHub">
           View source <span aria-hidden="true">↗</span>
@@ -201,17 +264,17 @@ function installerHtml() {
           Photopea plugin
           <span class="install-version">v${escapeHtml(META.version)}</span>
         </div>
-        <h1>Split disconnected artwork into layers.</h1>
+        <h1>Export disconnected artwork as PNGs.</h1>
         <p class="intro">
           Detect separate opaque regions through the alpha channel, preview them,
-          then create one layer for each element—ideal for asset sheets and
+          then export one cropped PNG for each element—ideal for asset sheets and
           scattered sprites.
         </p>
         <div class="feature-pills">
           <span>Alpha detection</span>
           <span>Connected components</span>
-          <span>Safe scan</span>
-          <span>Named layers</span>
+          <span>Safe preview</span>
+          <span>Folder or ZIP</span>
         </div>
         <div class="install-actions">
           <button class="download-button" id="download-plugin" type="button">
@@ -258,10 +321,6 @@ function readInputs() {
   state.prefix = document.querySelector("#prefix")?.value ?? state.prefix;
   state.eightConnected =
     document.querySelector("#eight")?.checked ?? state.eightConnected;
-  state.hideSource =
-    document.querySelector("#hide-source")?.checked ?? state.hideSource;
-  state.groupLayers =
-    document.querySelector("#group-layers")?.checked ?? state.groupLayers;
 }
 
 function clearActiveRequest() {
@@ -541,103 +600,163 @@ function makeCloseTempScript({
 }());`;
 }
 
-function makePlaceLayerScript({
-  requestId,
-  layer,
-  index,
-  total,
-  groupName,
-  groupLayers,
-  hideSource,
-  sourceLayerId,
-  sourceLayerName,
-  isLast,
-}) {
-  const payload = JSON.stringify({
-    requestId,
-    layer,
-    index,
-    total,
-    groupName,
-    groupLayers,
-    hideSource,
-    sourceLayerId,
-    sourceLayerName,
-    isLast,
-  });
-
-  return `
-(function () {
-  var settings = ${payload};
-  ${commonHelpers()}
-  try {
-    if (!app.documents || app.documents.length === 0) {
-      throw new Error("The source document is no longer open.");
-    }
-    var documentRef = app.activeDocument;
-    var sourceLayer = findLayerById(documentRef, settings.sourceLayerId);
-    if (!sourceLayer) {
-      for (var search = 0; search < documentRef.layers.length; search++) {
-        if (documentRef.layers[search].name === settings.sourceLayerName) {
-          sourceLayer = documentRef.layers[search];
-          break;
+function imageDataToPngBytes(imageData) {
+  return new Promise((resolve, reject) => {
+    const canvas = document.createElement("canvas");
+    canvas.width = imageData.width;
+    canvas.height = imageData.height;
+    canvas.getContext("2d").putImageData(imageData, 0, 0);
+    canvas.toBlob(
+      (blob) => {
+        if (!blob) {
+          reject(new Error("Failed to encode a PNG crop."));
+          return;
         }
+        blob
+          .arrayBuffer()
+          .then((buffer) => resolve(new Uint8Array(buffer)))
+          .catch(reject);
+      },
+      "image/png",
+    );
+  });
+}
+
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+function openDatabase() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, DB_VERSION);
+    request.onupgradeneeded = () => {
+      const database = request.result;
+      if (!database.objectStoreNames.contains(STORE_NAME)) {
+        database.createObjectStore(STORE_NAME);
       }
-    }
-    if (!sourceLayer) throw new Error("The original source layer could not be found.");
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
 
-    var group = null;
-    if (settings.groupLayers) {
-      group = findLayerSetByName(documentRef, settings.groupName);
-      if (!group) {
-        group = documentRef.layerSets.add();
-        group.name = settings.groupName;
-      }
-    }
+async function storeDirectoryHandle(handle) {
+  const database = await openDatabase();
+  await new Promise((resolve, reject) => {
+    const transaction = database.transaction(STORE_NAME, "readwrite");
+    transaction.objectStore(STORE_NAME).put(handle, DIRECTORY_KEY);
+    transaction.oncomplete = resolve;
+    transaction.onerror = () => reject(transaction.error);
+    transaction.onabort = () => reject(transaction.error);
+  });
+  database.close();
+}
 
-    documentRef.activeLayer = sourceLayer;
-    app.open(settings.layer.dataUrl, null, true);
-    var resultLayer = documentRef.activeLayer;
-    if (!resultLayer || resultLayer === sourceLayer) {
-      throw new Error("Photopea did not insert layer " + settings.layer.name + ".");
-    }
-    resultLayer.name = settings.layer.name;
-
-    if (group) {
-      try { resultLayer.move(group, ElementPlacement.INSIDE); }
-      catch (_) {
-        try { resultLayer.move(group, ElementPlacement.PLACEATBEGINNING); } catch (__) {}
-      }
-    }
-
-    // Crops are placed as small smart objects — move them to the original bbox origin.
-    try {
-      var bounds = resultLayer.bounds;
-      var dx = settings.layer.x - px(bounds[0]);
-      var dy = settings.layer.y - px(bounds[1]);
-      if (dx !== 0 || dy !== 0) resultLayer.translate(dx, dy);
-    } catch (translateError) {}
-
-    resultLayer.visible = true;
-
-    if (settings.isLast && settings.hideSource) {
-      try { sourceLayer.visible = false; } catch (_) {}
-    }
-
-    send("split-progress", {
-      ok: true,
-      index: settings.index,
-      total: settings.total,
-      name: settings.layer.name,
-      done: !!settings.isLast
+async function loadStoredDirectoryHandle() {
+  try {
+    const database = await openDatabase();
+    const handle = await new Promise((resolve, reject) => {
+      const transaction = database.transaction(STORE_NAME, "readonly");
+      const request = transaction.objectStore(STORE_NAME).get(DIRECTORY_KEY);
+      request.onsuccess = () => resolve(request.result || null);
+      request.onerror = () => reject(request.error);
     });
-  } catch (error) {
-    send("split", {
-      ok: false,
-      message: error && error.message ? error.message : String(error)
-    });
+    database.close();
+
+    state.folderHandle = handle;
+    state.folderName = (handle && handle.name) || "";
+    state.folderPermission = "none";
+
+    if (handle && handle.queryPermission) {
+      state.folderPermission = await handle.queryPermission({
+        mode: "readwrite",
+      });
+    }
+  } catch {
+    state.folderHandle = null;
+    state.folderName = "";
+    state.folderPermission = "none";
   }
-}());`;
+}
+
+function openFolderPicker(mode = "choose") {
+  if (!state.embedded) {
+    state.statusKind = "idle";
+    state.statusText = "Install the plugin to choose an export folder.";
+    render();
+    return;
+  }
+
+  const pickerUrl = new URL("picker.html", pluginBaseUrl());
+  pickerUrl.searchParams.set("from", "photopea");
+  pickerUrl.searchParams.set("mode", mode);
+  pickerUrl.searchParams.set("v", META.version);
+  state.pickerWindow = window.open(
+    pickerUrl.href,
+    "photopea-alpha-split-folder",
+    "popup=yes,width=500,height=560",
+  );
+
+  if (!state.pickerWindow) {
+    state.exportAfterFolderChoice = false;
+    state.statusKind = "error";
+    state.statusText =
+      "The folder window was blocked. Allow pop-ups for this plugin, or switch destination to ZIP.";
+    render();
+    return;
+  }
+
+  state.statusKind = "idle";
+  state.statusText =
+    mode === "restore"
+      ? "Restore folder access in the secure window to continue exporting."
+      : "Choose an export folder in the new window.";
+  render();
+}
+
+async function ensureFolderPermission() {
+  if (!state.folderHandle) {
+    openFolderPicker("choose");
+    return false;
+  }
+
+  let permission = state.folderPermission;
+  if (state.folderHandle.queryPermission) {
+    permission = await state.folderHandle.queryPermission({ mode: "readwrite" });
+    state.folderPermission = permission;
+  }
+
+  if (permission === "granted") return true;
+
+  if (state.folderHandle.requestPermission) {
+    try {
+      permission = await state.folderHandle.requestPermission({
+        mode: "readwrite",
+      });
+      state.folderPermission = permission;
+      if (permission === "granted") return true;
+    } catch {
+      // Cross-origin iframes often block requestPermission — use the popup.
+    }
+  }
+
+  openFolderPicker("restore");
+  return false;
+}
+
+async function writeFileToDirectory(filename, bytes) {
+  const fileHandle = await state.folderHandle.getFileHandle(filename, {
+    create: true,
+  });
+  const writable = await fileHandle.createWritable();
+  await writable.write(bytes);
+  await writable.close();
+  return filename;
 }
 
 function decodePng(buffer, maxSide) {
@@ -670,20 +789,6 @@ function decodePng(buffer, maxSide) {
       reject(new Error("Failed to decode the exported PNG."));
     };
     img.src = url;
-  });
-}
-
-function imageDataToDataUrl(imageData) {
-  return new Promise((resolve, reject) => {
-    const canvas = document.createElement("canvas");
-    canvas.width = imageData.width;
-    canvas.height = imageData.height;
-    canvas.getContext("2d").putImageData(imageData, 0, 0);
-    try {
-      resolve(canvas.toDataURL("image/png"));
-    } catch (error) {
-      reject(error);
-    }
   });
 }
 
@@ -799,7 +904,7 @@ async function finishScanAnalysis(requestId, pngBuffer, meta) {
     state.statusKind = labeled.components.length ? "ok" : "error";
     const scaleNote =
       decoded.scale < 0.999
-        ? " Preview used a downscaled pass; Split rebuilds at full resolution."
+        ? " Preview used a downscaled pass; Export rebuilds at full resolution."
         : "";
     state.statusText = labeled.components.length
       ? `Preview ready: ${labeled.components.length} separate element${labeled.components.length === 1 ? "" : "s"} detected.${scaleNote}`
@@ -819,15 +924,15 @@ async function ensureFullResolutionScan(requestId, settings) {
   }
 
   const timeoutMs = operationTimeoutMs(
-    "split",
+    "export",
     state.scan.meta,
     state.scan.components.length,
   );
   setWorking(
     "preparing",
-    "Building full-resolution masks for Split…",
+    "Building full-resolution masks for Export…",
     requestId,
-    "split",
+    "export",
     timeoutMs,
   );
   render();
@@ -839,7 +944,7 @@ async function ensureFullResolutionScan(requestId, settings) {
     "preparing",
     "Detecting elements at full resolution…",
     requestId,
-    "split",
+    "export",
     timeoutMs,
   );
   render();
@@ -908,52 +1013,7 @@ function beginScan() {
   }
 }
 
-async function placeNextSplitLayer(requestId) {
-  const job = state._splitJob;
-  if (!job || state.activeRequestId !== requestId) return;
-
-  if (job.index >= job.layers.length) {
-    clearActiveRequest();
-    state.stage = "complete";
-    state.statusKind = "ok";
-    state.statusText = `Created ${job.layers.length} layer${job.layers.length === 1 ? "" : "s"} from alpha regions.`;
-    state._splitJob = null;
-    render();
-    return;
-  }
-
-  const layer = job.layers[job.index];
-  const isLast = job.index === job.layers.length - 1;
-  setWorking(
-    "processing",
-    `Creating layer ${job.index + 1} / ${job.layers.length}: ${layer.name}`,
-    requestId,
-    "split",
-    job.timeoutMs,
-  );
-  render();
-
-  try {
-    postScript(
-      makePlaceLayerScript({
-        requestId,
-        layer,
-        index: job.index,
-        total: job.layers.length,
-        groupName: job.groupName,
-        groupLayers: job.groupLayers,
-        hideSource: job.hideSource,
-        sourceLayerId: job.sourceLayerId,
-        sourceLayerName: job.sourceLayerName,
-        isLast,
-      }),
-    );
-  } catch (error) {
-    failActiveRequest(error && error.message ? error.message : String(error));
-  }
-}
-
-async function beginSplit() {
+async function beginExport() {
   if (!state.embedded) {
     state.statusKind = "idle";
     state.statusText = "Install the plugin to use it inside Photopea.";
@@ -963,7 +1023,7 @@ async function beginSplit() {
   if (state.statusKind === "working") return;
   if (!state.scan || !state.scan.components.length) {
     state.statusKind = "error";
-    state.statusText = "Preview a layer before splitting.";
+    state.statusText = "Preview a layer before exporting.";
     render();
     return;
   }
@@ -978,29 +1038,40 @@ async function beginSplit() {
     return;
   }
 
+  if (state.destination === "folder") {
+    const ready = await ensureFolderPermission();
+    if (!ready) {
+      state.exportAfterFolderChoice = true;
+      return;
+    }
+  }
+
   const requestId = createRequestId();
   const timeoutMs = operationTimeoutMs(
-    "split",
+    "export",
     state.scan.meta,
     state.scan.components.length,
   );
-  setWorking("preparing", "Preparing separated layers…", requestId, "split", timeoutMs);
+  setWorking("preparing", "Preparing cropped PNG exports…", requestId, "export", timeoutMs);
   render();
 
   try {
     const scan = await ensureFullResolutionScan(requestId, settings);
     if (!scan || state.activeRequestId !== requestId) return;
 
-    const layers = [];
+    const zipEntries = [];
+    const written = [];
+
     for (let index = 0; index < scan.components.length; index++) {
       if (state.activeRequestId !== requestId) return;
       const component = scan.components[index];
-      const name = `${settings.prefix}_${padNumber(component.id, 2)}`;
+      const baseName = `${settings.prefix}_${padNumber(component.id, 2)}`;
+      const filename = `${baseName}.png`;
       setWorking(
-        "preparing",
-        `Encoding crop ${index + 1} / ${scan.components.length}: ${name}`,
+        "exporting",
+        `Exporting ${index + 1} / ${scan.components.length}: ${filename}`,
         requestId,
-        "split",
+        "export",
         timeoutMs,
       );
       render();
@@ -1010,30 +1081,36 @@ async function beginSplit() {
         scan.labels,
         component,
       );
-      const dataUrl = await imageDataToDataUrl(crop.imageData);
-      layers.push({
-        name,
-        dataUrl,
-        x: crop.x,
-        y: crop.y,
-      });
+      const bytes = await imageDataToPngBytes(crop.imageData);
+
+      if (state.destination === "folder") {
+        written.push(await writeFileToDirectory(filename, bytes));
+      } else {
+        zipEntries.push({ name: filename, data: bytes });
+        written.push(filename);
+      }
       await yieldToUi();
     }
 
     if (state.activeRequestId !== requestId) return;
 
-    state._splitJob = {
-      layers,
-      index: 0,
-      groupName: `${settings.prefix}s`,
-      groupLayers: settings.groupLayers,
-      hideSource: settings.hideSource,
-      sourceLayerId: scan.meta.layerId,
-      sourceLayerName: scan.meta.layerName,
-      timeoutMs,
-    };
+    if (state.destination === "zip") {
+      const zipBlob = ZIP.createStoredZip(zipEntries);
+      const zipName = `${settings.prefix}_elements.zip`;
+      downloadBlob(zipBlob, zipName);
+      clearActiveRequest();
+      state.stage = "complete";
+      state.statusKind = "ok";
+      state.statusText = `Downloaded ${written.length} PNG${written.length === 1 ? "" : "s"} as ${zipName}.`;
+      render();
+      return;
+    }
 
-    await placeNextSplitLayer(requestId);
+    clearActiveRequest();
+    state.stage = "complete";
+    state.statusKind = "ok";
+    state.statusText = `Exported ${written.length} PNG${written.length === 1 ? "" : "s"} to “${state.folderName}”.`;
+    render();
   } catch (error) {
     failActiveRequest(error && error.message ? error.message : String(error));
   }
@@ -1196,39 +1273,6 @@ function handleTaggedMessage(payload) {
     return;
   }
 
-  if (payload.type === "split-progress") {
-    if (!payload.ok) {
-      failActiveRequest(payload.message || "Could not create a split layer.");
-      return;
-    }
-    if (!state._splitJob) return;
-    state._splitJob.index = payload.index + 1;
-    if (payload.done) {
-      clearActiveRequest();
-      state.stage = "complete";
-      state.statusKind = "ok";
-      state.statusText = `Created ${payload.total} layer${payload.total === 1 ? "" : "s"} from alpha regions.`;
-      state._splitJob = null;
-      render();
-      return;
-    }
-    placeNextSplitLayer(payload.requestId);
-    return;
-  }
-
-  if (payload.type === "split") {
-    if (!payload.ok) {
-      failActiveRequest(payload.message || "Could not create the split layers.");
-      return;
-    }
-    clearActiveRequest();
-    state.stage = "complete";
-    state.statusKind = "ok";
-    state.statusText = `Created ${payload.created} layer${payload.created === 1 ? "" : "s"} from alpha regions.`;
-    render();
-    return;
-  }
-
   if (payload.type === "error") {
     failActiveRequest(payload.message || "Photopea reported an error.");
   }
@@ -1255,8 +1299,31 @@ function bindEvents() {
   document.querySelectorAll("[data-run]").forEach((button) => {
     button.addEventListener("click", () => {
       if (button.dataset.run === "scan") beginScan();
-      if (button.dataset.run === "split") beginSplit();
+      if (button.dataset.run === "export") beginExport();
     });
+  });
+
+  document.querySelectorAll("[data-destination]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const next = button.dataset.destination;
+      if (next !== "folder" && next !== "zip") return;
+      state.destination = next;
+      if (state.statusKind !== "working") {
+        state.statusKind = "idle";
+        state.statusText =
+          next === "zip"
+            ? "ZIP mode will download one archive of cropped PNGs."
+            : state.folderName
+              ? `Folder ready: “${state.folderName}”.`
+              : "Choose an export folder, or switch to ZIP.";
+      }
+      render();
+    });
+  });
+
+  document.querySelector("#choose-folder")?.addEventListener("click", () => {
+    state.exportAfterFolderChoice = false;
+    openFolderPicker(state.folderName ? "change" : "choose");
   });
 
   document
@@ -1278,7 +1345,56 @@ function bindEvents() {
   });
 }
 
+async function handlePickerMessage(event) {
+  if (event.origin !== window.location.origin || !event.data || !event.data.type) {
+    return;
+  }
+
+  if (event.data.type === READY_MESSAGE) {
+    if (event.data.handle) {
+      state.folderHandle = event.data.handle;
+      state.folderName = event.data.handle.name || event.data.name || "";
+      try {
+        await storeDirectoryHandle(event.data.handle);
+      } catch {
+        // Remembering is best-effort.
+      }
+    } else {
+      await loadStoredDirectoryHandle();
+    }
+    state.folderPermission = "granted";
+    state.statusKind = "ok";
+    state.statusText = `Using “${state.folderName}” for direct exports.`;
+    render();
+
+    if (state.exportAfterFolderChoice) {
+      state.exportAfterFolderChoice = false;
+      beginExport();
+    }
+    return;
+  }
+
+  if (event.data.type === CANCEL_MESSAGE) {
+    state.exportAfterFolderChoice = false;
+    state.statusKind = "error";
+    state.statusText =
+      event.data.reason === "unsupported"
+        ? "Folder access is unavailable. Switch destination to ZIP."
+        : "No export folder was selected.";
+    render();
+  }
+}
+
 window.addEventListener("message", (event) => {
+  if (
+    event.data &&
+    typeof event.data === "object" &&
+    (event.data.type === READY_MESSAGE || event.data.type === CANCEL_MESSAGE)
+  ) {
+    handlePickerMessage(event);
+    return;
+  }
+
   if (!state.embedded || event.source !== window.parent) return;
 
   if (event.data instanceof ArrayBuffer) {
@@ -1314,4 +1430,7 @@ window.addEventListener("message", (event) => {
 state.statusText = state.embedded
   ? "Select a layer with transparent gaps, then preview."
   : "Interactive plugin preview.";
-render();
+
+loadStoredDirectoryHandle().finally(() => {
+  render();
+});
