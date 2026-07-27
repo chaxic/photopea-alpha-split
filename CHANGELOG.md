@@ -2,6 +2,27 @@
 
 All notable changes to Alpha Split for Photopea are documented here.
 
+## [1.3.7] - 2026-07-28
+
+### Added
+
+- **Export** writes `alpha-split-id-mask.png` beside the cropped PNGs and JSON
+  (folder and ZIP). The file encodes each label id in RGB so Restore can reload
+  the exact edited mask without a Photopea capture. `alpha-split-data.json`
+  records the filename in `idMask`.
+
+### Changed
+
+- **Restore ID Mask** loads `alpha-split-id-mask.png` from the export folder when
+  present (and dimensions match the stored document). If the file is missing or
+  invalid, Restore falls back to the previous light-capture + box rematch path.
+- Export after a mask-only Restore light-captures the active layer for crop
+  pixels, then writes PNGs, the ID mask, and JSON.
+
+### Verification
+
+- Automated checks passed on 28 July 2026.
+
 ## [1.3.6] - 2026-07-28
 
 ### Fixed

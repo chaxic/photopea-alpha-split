@@ -374,6 +374,32 @@ test("matchComponentsToElements remaps CCL ids to stored boxes", () => {
   assert.equal(matched.labels[1 * 8 + 3], 0);
 });
 
+test("ID mask PNG round-trips label ids above 255", () => {
+  const labels = new Int32Array(4 * 4);
+  labels[0] = 1;
+  labels[5] = 300;
+  labels[10] = 65540;
+  const encoded = core.encodeLabelsToImageData(labels, 4, 4);
+  const decoded = core.decodeLabelsFromImageData(encoded);
+  assert.equal(decoded[0], 1);
+  assert.equal(decoded[5], 300);
+  assert.equal(decoded[10], 65540);
+  assert.equal(decoded[1], 0);
+});
+
+test("Export writes ID mask and Restore prefers the folder file", () => {
+  const app = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
+  const dataUtil = fs.readFileSync(path.join(__dirname, "..", "data-util.js"), "utf8");
+  assert.match(dataUtil, /ID_MASK_FILENAME/);
+  assert.match(dataUtil, /alpha-split-id-mask\.png/);
+  assert.match(app, /writeIdMaskFile/);
+  assert.match(app, /restoreIdMaskFromFolder/);
+  assert.match(app, /buildScanFromIdMaskLabels/);
+  assert.match(app, /continueExportWithArtwork/);
+  assert.match(app, /encodeLabelsToImageData/);
+  assert.match(app, /decodeLabelsFromImageData/);
+});
+
 test("buildSplitData creates sequential filenames and bboxes", () => {
   const built = data.buildSplitData({
     settings: {

@@ -449,6 +449,66 @@
     return Array.from(seen);
   }
 
+  function encodeLabelsToImageData(labels, width, height) {
+    var data = new Uint8ClampedArray(width * height * 4);
+    for (var i = 0; i < labels.length; i++) {
+      var id = labels[i] | 0;
+      var o = i << 2;
+      if (!id) {
+        data[o] = 0;
+        data[o + 1] = 0;
+        data[o + 2] = 0;
+        data[o + 3] = 0;
+        continue;
+      }
+      data[o] = id & 255;
+      data[o + 1] = (id >>> 8) & 255;
+      data[o + 2] = (id >>> 16) & 255;
+      data[o + 3] = 255;
+    }
+    if (typeof ImageData !== "undefined") {
+      try {
+        return new ImageData(data, width, height);
+      } catch (_) {}
+    }
+    return { width: width, height: height, data: data };
+  }
+
+  function decodeLabelsFromImageData(imageData) {
+    var width = imageData.width;
+    var height = imageData.height;
+    var src = imageData.data;
+    var labels = new Int32Array(width * height);
+    for (var i = 0; i < labels.length; i++) {
+      var o = i << 2;
+      if (src[o + 3] < 128) {
+        labels[i] = 0;
+        continue;
+      }
+      labels[i] = src[o] | (src[o + 1] << 8) | (src[o + 2] << 16);
+    }
+    return labels;
+  }
+
+  // Opaque placeholder pixels so the preview paints solid label colours.
+  function imageDataFromLabels(labels, width, height) {
+    var data = new Uint8ClampedArray(width * height * 4);
+    for (var i = 0; i < labels.length; i++) {
+      if (!labels[i]) continue;
+      var o = i << 2;
+      data[o] = 255;
+      data[o + 1] = 255;
+      data[o + 2] = 255;
+      data[o + 3] = 255;
+    }
+    if (typeof ImageData !== "undefined") {
+      try {
+        return new ImageData(data, width, height);
+      } catch (_) {}
+    }
+    return { width: width, height: height, data: data };
+  }
+
   /**
    * Rebuild an analysis-resolution label map from stored full-res element bboxes.
    * Opaque pixels pick the smallest containing scaled bbox (stable with overlaps).
@@ -678,5 +738,8 @@
     createDefaultPalette: createDefaultPalette,
     createRandomPalette: createRandomPalette,
     collectLabelIds: collectLabelIds,
+    encodeLabelsToImageData: encodeLabelsToImageData,
+    decodeLabelsFromImageData: decodeLabelsFromImageData,
+    imageDataFromLabels: imageDataFromLabels,
   };
 }));

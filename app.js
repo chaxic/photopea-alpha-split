@@ -354,7 +354,7 @@ function panelHtml() {
       <footer class="panel-footer">
         <div class="panel-footer-copy">
           <span>Tested with Photopea ${escapeHtml(META.testedPhotopea)} · scripting v${escapeHtml(META.scriptingVersion)}</span>
-          <span>Import places PNGs · Position uses stored boxes by layer name</span>
+          <span>Export writes ID mask · Restore loads it from the folder</span>
         </div>
         <a href="${META.repositoryUrl}" target="_blank" rel="noreferrer" title="View the Alpha Split source code on GitHub">
           View source <span aria-hidden="true">↗</span>
@@ -463,6 +463,7 @@ function clearActiveRequest() {
   // Import jobs hold a PNG data URL per pending element, so drop them with the request.
   state._importJob = null;
   state._positionGroupName = null;
+  state._exportAfterArtwork = null;
 }
 
 function failActiveRequest(message) {
@@ -2129,7 +2130,7 @@ function applyLoadedSplitData(data, sourceLabel) {
   state.editTool = "sample";
   clearPreviewHover();
   state.statusKind = "ok";
-  state.statusText = `Loaded ${data.elements.length} element${data.elements.length === 1 ? "" : "s"} from ${sourceLabel}. Click Restore ID Mask for editable shapes.`;
+  state.statusText = `Loaded ${data.elements.length} element${data.elements.length === 1 ? "" : "s"} from ${sourceLabel}. Click Restore ID Mask (uses saved mask file when available).`;
   return true;
 }
 
@@ -2256,6 +2257,136 @@ async function writeFolderSplitData(data) {
   const bytes = new TextEncoder().encode(text);
   await writeFileToDirectory(DATA.DATA_FILENAME, bytes);
   state.folderData = data;
+}
+
+async function readFolderIdMaskBytes() {
+  if (!state.folderHandle || state.folderPermission !== "granted") return null;
+  try {
+    const name =
+      (state.latestSplitData && state.latestSplitData.idMask) ||
+      (state.folderData && state.folderData.idMask) ||
+      DATA.ID_MASK_FILENAME;
+    const fileHandle = await state.folderHandle.getFileHandle(name);
+    const file = await fileHandle.getFile();
+    return new Uint8Array(await file.arrayBuffer());
+  } catch {
+    return null;
+  }
+}
+
+function buildScanFromIdMaskLabels(labels, width, height, data) {
+  const settings = DATA.applySettingsFromData(data) || settingsFromState();
+  const minSize = settings.minSize || 1;
+  const components = CORE.buildComponentsFromLabels(
+    labels,
+    width,
+    height,
+    minSize,
+  );
+  const labelIds = components.map((c) => c.id);
+  const imageData = CORE.imageDataFromLabels(labels, width, height);
+  const maxSide = META.previewMaxSide || 2048;
+  const scale = Math.min(1, maxSide / Math.max(width, height));
+  let analysisLabels = labels;
+  let analysisImage = imageData;
+  let analysisW = width;
+  let analysisH = height;
+  let analysisScale = 1;
+
+  if (scale < 0.999) {
+    analysisW = Math.max(1, Math.round(width * scale));
+    analysisH = Math.max(1, Math.round(height * scale));
+    analysisScale = scale;
+    // Nearest-neighbour downscale of labels for responsive editing.
+    analysisLabels = new Int32Array(analysisW * analysisH);
+    for (let y = 0; y < analysisH; y++) {
+      const srcY = Math.min(height - 1, Math.floor(y / scale));
+      for (let x = 0; x < analysisW; x++) {
+        const srcX = Math.min(width - 1, Math.floor(x / scale));
+        analysisLabels[y * analysisW + x] = labels[srcY * width + srcX];
+      }
+    }
+    analysisImage = CORE.imageDataFromLabels(
+      analysisLabels,
+      analysisW,
+      analysisH,
+    );
+  }
+
+  return {
+    imageData: analysisImage,
+    labels: analysisLabels,
+    components:
+      analysisScale < 0.999
+        ? CORE.buildComponentsFromLabels(
+            analysisLabels,
+            analysisW,
+            analysisH,
+            minSize,
+          )
+        : components,
+    labelColors: CORE.createDefaultPalette(labelIds),
+    labelsEdited: false,
+    labelsCommitted: true,
+    exportLabels: labels,
+    exportImageData: null,
+    width,
+    height,
+    analysisWidth: analysisW,
+    analysisHeight: analysisH,
+    analysisScale,
+    pngBuffer: null,
+    fullResReady: true,
+    fromIdMask: true,
+    meta: data.source || {},
+    settings,
+    restoredFromData: true,
+  };
+}
+
+async function restoreIdMaskFromFolder() {
+  const data = state.latestSplitData || state.folderData;
+  const validation = DATA.validateSplitData(data);
+  if (!validation.ok || !data.elements.length) return false;
+
+  const bytes = await readFolderIdMaskBytes();
+  if (!bytes) return false;
+
+  const decoded = await decodePng(bytes, 0);
+  const labels = CORE.decodeLabelsFromImageData(decoded.imageData);
+  const docW =
+    Number(data.document && data.document.width) || decoded.fullWidth;
+  const docH =
+    Number(data.document && data.document.height) || decoded.fullHeight;
+  if (decoded.fullWidth !== docW || decoded.fullHeight !== docH) {
+    // Mask dimensions must match the stored document size.
+    return false;
+  }
+
+  state.sampledLabel = null;
+  state.editTool = "sample";
+  clearPreviewHover();
+  state.scan = buildScanFromIdMaskLabels(
+    labels,
+    decoded.fullWidth,
+    decoded.fullHeight,
+    data,
+  );
+  state.scanMode = "restore";
+  state.stage = "complete";
+  state.statusKind = "ok";
+  state.statusText = `Restored ${state.scan.components.length} element${state.scan.components.length === 1 ? "" : "s"} from ${DATA.ID_MASK_FILENAME}.`;
+  return true;
+}
+
+async function writeIdMaskFile(labels, width, height, zipEntries) {
+  const encoded = CORE.encodeLabelsToImageData(labels, width, height);
+  const bytes = await imageDataToPngBytes(encoded);
+  if (zipEntries) {
+    zipEntries.push({ name: DATA.ID_MASK_FILENAME, data: bytes });
+    return DATA.ID_MASK_FILENAME;
+  }
+  return writeFileToDirectory(DATA.ID_MASK_FILENAME, bytes);
 }
 
 function elementGroupName(data) {
@@ -2701,6 +2832,52 @@ async function ensureFullResolutionScan(requestId, settings) {
   const scan = state.scan;
   if (!scan) throw new Error("ID Mask data is missing. Run Generate or Restore ID Mask again.");
 
+  // Restored from alpha-split-id-mask.png: labels are already full-res.
+  if (scan.fromIdMask) {
+    let fullLabels = scan.exportLabels;
+    if (scan.labelsEdited && scan.labelsCommitted && scan.analysisScale < 0.999) {
+      // Upscale edited analysis labels; no artwork opaque mask is available yet.
+      fullLabels = new Int32Array(scan.width * scan.height);
+      const aw = scan.analysisWidth;
+      const ah = scan.analysisHeight;
+      const scaleX = scan.width / aw;
+      const scaleY = scan.height / ah;
+      for (let y = 0; y < scan.height; y++) {
+        const sy = Math.min(ah - 1, Math.floor(y / scaleY));
+        for (let x = 0; x < scan.width; x++) {
+          const sx = Math.min(aw - 1, Math.floor(x / scaleX));
+          fullLabels[y * scan.width + x] = scan.labels[sy * aw + sx];
+        }
+      }
+      scan.exportLabels = fullLabels;
+    } else if (scan.labelsEdited && scan.labelsCommitted && scan.analysisScale >= 0.999) {
+      fullLabels = scan.labels;
+      scan.exportLabels = fullLabels;
+    }
+
+    if (!fullLabels) {
+      throw new Error("ID Mask data is missing. Run Generate or Restore ID Mask again.");
+    }
+
+    if (scan.exportImageData) {
+      const components = CORE.buildComponentsFromLabels(
+        fullLabels,
+        scan.width,
+        scan.height,
+        settings.minSize,
+      );
+      scan.components = components;
+      return {
+        ...scan,
+        imageData: scan.exportImageData,
+        labels: fullLabels,
+        components,
+      };
+    }
+    // Artwork pixels are still needed for crops — caller captures them.
+    return { needsArtwork: true, scan };
+  }
+
   if (scan.labelsEdited) {
     if (scan.exportLabels && scan.exportImageData && scan.labelsCommitted) {
       return {
@@ -2864,6 +3041,34 @@ function beginScan(mode = "generate") {
     return;
   }
 
+  if (mode === "restore") {
+    // Prefer the exported ID mask file — no Photopea round trip.
+    setWorking(
+      "loading id mask",
+      `Loading ${DATA.ID_MASK_FILENAME} from the export folder…`,
+      createRequestId(),
+      "scan",
+    );
+    render();
+    restoreIdMaskFromFolder()
+      .then((ok) => {
+        if (ok) {
+          clearActiveRequest();
+          render();
+          return;
+        }
+        beginScanCapture("restore");
+      })
+      .catch(() => {
+        beginScanCapture("restore");
+      });
+    return;
+  }
+
+  beginScanCapture("generate");
+}
+
+function beginScanCapture(mode = "generate") {
   const requestId = createRequestId();
   const restoreMode = mode === "restore";
   state.scanMode = restoreMode ? "restore" : "generate";
@@ -2881,7 +3086,7 @@ function beginScan(mode = "generate") {
   setWorking(
     restoreMode ? "exporting the layer" : "receiving snapshot",
     restoreMode
-      ? `Exporting the active layer${sizeHint} for Restore ID Mask…`
+      ? `No saved ID mask found — exporting the active layer${sizeHint}…`
       : `Snapshotting the document${sizeHint} (large files take a while)…`,
     requestId,
     "scan",
@@ -2967,89 +3172,190 @@ async function beginExport() {
   render();
 
   try {
-    const scan = await ensureFullResolutionScan(requestId, settings);
-    if (!scan || state.activeRequestId !== requestId) return;
+    const prepared = await ensureFullResolutionScan(requestId, settings);
+    if (!prepared || state.activeRequestId !== requestId) return;
 
-    if (!scan.components.length) {
-      failActiveRequest("No elements to export after Update.");
-      return;
-    }
-
-    const zipEntries = [];
-    const written = [];
-
-    for (let index = 0; index < scan.components.length; index++) {
-      if (state.activeRequestId !== requestId) return;
-      const component = scan.components[index];
-      const baseName = `${settings.prefix}_${padNumber(index + 1, 2)}`;
-      const filename = `${baseName}.png`;
+    if (prepared.needsArtwork) {
+      // Mask was restored from file — grab artwork pixels with a light layer PNG.
+      state._exportAfterArtwork = { requestId, settings, timeoutMs };
+      state.pendingBinary = null;
+      state.pendingDone = false;
+      state.expectBinary = true;
       setWorking(
-        "exporting",
-        `Exporting ${index + 1} / ${scan.components.length}: ${filename}`,
+        "exporting the layer",
+        "Capturing the active layer to crop exported PNGs…",
         requestId,
         "export",
         timeoutMs,
       );
       render();
-
-      const crop = CORE.extractComponentCrop(
-        scan.imageData,
-        scan.labels,
-        component,
-      );
-      const bytes = await imageDataToPngBytes(crop.imageData);
-
-      if (state.destination === "folder") {
-        written.push(await writeFileToDirectory(filename, bytes));
-      } else {
-        zipEntries.push({ name: filename, data: bytes });
-        written.push(filename);
-      }
-      await yieldToUi();
+      postScript(makeLightCaptureScript(requestId));
+      return;
     }
 
-    if (state.activeRequestId !== requestId) return;
-
-    const splitData = DATA.buildSplitData({
-      settings,
-      components: scan.components,
-      meta: scan.meta || {},
-      width: scan.width,
-      height: scan.height,
-      pluginVersion: META.version,
-      exported: true,
-    });
-    state.latestSplitData = splitData;
-
-    if (state.destination === "zip") {
-      const jsonBytes = new TextEncoder().encode(
-        JSON.stringify(splitData, null, 2),
-      );
-      zipEntries.push({ name: DATA.DATA_FILENAME, data: jsonBytes });
-      const zipBlob = ZIP.createStoredZip(zipEntries);
-      const zipName = `${settings.prefix}_elements.zip`;
-      downloadBlob(zipBlob, zipName);
-    } else {
-      await writeFolderSplitData(splitData);
-    }
-
-    await upsertDataLayer(splitData);
-
-    clearActiveRequest();
-    state.stage = "complete";
-    state.statusKind = "ok";
-    state.statusText =
-      state.destination === "zip"
-        ? `Downloaded ${written.length} PNG${written.length === 1 ? "" : "s"} and data JSON as ${settings.prefix}_elements.zip.`
-        : `Exported ${written.length} PNG${written.length === 1 ? "" : "s"} and ${DATA.DATA_FILENAME} to “${state.folderName}”.`;
-    render();
+    await writeExportOutputs(prepared, requestId, settings, timeoutMs);
   } catch (error) {
     failActiveRequest(error && error.message ? error.message : String(error));
   }
 }
 
+async function continueExportWithArtwork(requestId, pngBuffer) {
+  const pending = state._exportAfterArtwork;
+  if (!pending || pending.requestId !== requestId) return;
+  state._exportAfterArtwork = null;
+
+  const settings = pending.settings;
+  const timeoutMs = pending.timeoutMs;
+  try {
+    const decoded = await decodePng(pngBuffer, 0);
+    if (state.activeRequestId !== requestId) return;
+    const scan = state.scan;
+    if (!scan || !scan.exportLabels) {
+      failActiveRequest("ID Mask data is missing. Run Restore ID Mask again.");
+      return;
+    }
+    if (
+      decoded.fullWidth !== scan.width ||
+      decoded.fullHeight !== scan.height
+    ) {
+      failActiveRequest(
+        `Layer size ${decoded.fullWidth}×${decoded.fullHeight} does not match the ID mask ${scan.width}×${scan.height}.`,
+      );
+      return;
+    }
+
+    scan.exportImageData = decoded.imageData;
+    scan.pngBuffer = pngBuffer;
+    const components = CORE.buildComponentsFromLabels(
+      scan.exportLabels,
+      scan.width,
+      scan.height,
+      settings.minSize,
+    );
+    scan.components = components;
+    await writeExportOutputs(
+      {
+        ...scan,
+        imageData: decoded.imageData,
+        labels: scan.exportLabels,
+        components,
+      },
+      requestId,
+      settings,
+      timeoutMs,
+    );
+  } catch (error) {
+    failActiveRequest(error && error.message ? error.message : String(error));
+  }
+}
+
+async function writeExportOutputs(scan, requestId, settings, timeoutMs) {
+  if (!scan.components.length) {
+    failActiveRequest("No elements to export after Update.");
+    return;
+  }
+
+  const zipEntries = [];
+  const written = [];
+
+  for (let index = 0; index < scan.components.length; index++) {
+    if (state.activeRequestId !== requestId) return;
+    const component = scan.components[index];
+    const baseName = `${settings.prefix}_${padNumber(index + 1, 2)}`;
+    const filename = `${baseName}.png`;
+    setWorking(
+      "exporting",
+      `Exporting ${index + 1} / ${scan.components.length}: ${filename}`,
+      requestId,
+      "export",
+      timeoutMs,
+    );
+    render();
+
+    const crop = CORE.extractComponentCrop(
+      scan.imageData,
+      scan.labels,
+      component,
+    );
+    const bytes = await imageDataToPngBytes(crop.imageData);
+
+    if (state.destination === "folder") {
+      written.push(await writeFileToDirectory(filename, bytes));
+    } else {
+      zipEntries.push({ name: filename, data: bytes });
+      written.push(filename);
+    }
+    await yieldToUi();
+  }
+
+  if (state.activeRequestId !== requestId) return;
+
+  setWorking(
+    "exporting",
+    `Writing ${DATA.ID_MASK_FILENAME}…`,
+    requestId,
+    "export",
+    timeoutMs,
+  );
+  render();
+
+  const maskLabels = scan.labels;
+  await writeIdMaskFile(
+    maskLabels,
+    scan.width,
+    scan.height,
+    state.destination === "zip" ? zipEntries : null,
+  );
+
+  const splitData = DATA.buildSplitData({
+    settings,
+    components: scan.components,
+    meta: scan.meta || {},
+    width: scan.width,
+    height: scan.height,
+    pluginVersion: META.version,
+    exported: true,
+  });
+  state.latestSplitData = splitData;
+
+  if (state.destination === "zip") {
+    const jsonBytes = new TextEncoder().encode(
+      JSON.stringify(splitData, null, 2),
+    );
+    zipEntries.push({ name: DATA.DATA_FILENAME, data: jsonBytes });
+    const zipBlob = ZIP.createStoredZip(zipEntries);
+    const zipName = `${settings.prefix}_elements.zip`;
+    downloadBlob(zipBlob, zipName);
+  } else {
+    await writeFolderSplitData(splitData);
+  }
+
+  await upsertDataLayer(splitData);
+
+  clearActiveRequest();
+  state.stage = "complete";
+  state.statusKind = "ok";
+  state.statusText =
+    state.destination === "zip"
+      ? `Downloaded ${written.length} PNG${written.length === 1 ? "" : "s"}, ID mask, and data JSON as ${settings.prefix}_elements.zip.`
+      : `Exported ${written.length} PNG${written.length === 1 ? "" : "s"}, ${DATA.ID_MASK_FILENAME}, and ${DATA.DATA_FILENAME} to “${state.folderName}”.`;
+  render();
+}
+
 function handleBinary(buffer) {
-  if (!state.activeRequestId || state.activeOperation !== "scan") return;
+  if (!state.activeRequestId) return;
+  if (
+    state.activeOperation === "export" &&
+    state.stage === "exporting the layer"
+  ) {
+    state.pendingBinary = buffer;
+    if (state.pendingDone) {
+      state.pendingDone = false;
+      handleDone();
+    }
+    return;
+  }
+  if (state.activeOperation !== "scan") return;
   if (
     state.stage === "receiving snapshot" ||
     state.stage === "exporting the layer" ||
@@ -3210,6 +3516,21 @@ function handleDone() {
   // Position runs as a single script and completes on its position-done echo.
   if (state.activeOperation === "position") return;
 
+  if (
+    state.activeOperation === "export" &&
+    state.stage === "exporting the layer"
+  ) {
+    if (!state.pendingBinary) {
+      state.pendingDone = true;
+      return;
+    }
+    const layerPng = state.pendingBinary;
+    state.pendingBinary = null;
+    state.expectBinary = false;
+    continueExportWithArtwork(state.activeRequestId, layerPng);
+    return;
+  }
+
   if (state.activeOperation !== "scan") return;
 
   if (state.stage === "receiving snapshot") {
@@ -3270,6 +3591,8 @@ function handleTaggedMessage(payload) {
     }
     state._scanMeta = payload;
     if (
+      (state.activeOperation === "scan" ||
+        state.activeOperation === "export") &&
       (state.stage === "receiving snapshot" ||
         state.stage === "exporting the layer") &&
       state.pendingBinary &&

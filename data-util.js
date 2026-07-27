@@ -11,6 +11,7 @@
 
   var DATA_LAYER_NAME = "AlphaSplit Data";
   var DATA_FILENAME = "alpha-split-data.json";
+  var ID_MASK_FILENAME = "alpha-split-id-mask.png";
   var PLUGIN_ID = "alpha-split";
 
   function padNumber(value, width) {
@@ -62,6 +63,7 @@
         width: Number(options.width || meta.width) || 0,
         height: Number(options.height || meta.height) || 0,
       },
+      idMask: ID_MASK_FILENAME,
       elements: elements,
     };
   }
@@ -122,6 +124,7 @@
   return Object.freeze({
     DATA_LAYER_NAME: DATA_LAYER_NAME,
     DATA_FILENAME: DATA_FILENAME,
+    ID_MASK_FILENAME: ID_MASK_FILENAME,
     PLUGIN_ID: PLUGIN_ID,
     buildSplitData: buildSplitData,
     validateSplitData: validateSplitData,
