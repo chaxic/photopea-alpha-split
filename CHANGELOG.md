@@ -2,6 +2,22 @@
 
 All notable changes to Alpha Split for Photopea are documented here.
 
+## [1.0.1] - 2026-07-27
+
+### Fixed
+
+- Scan/Preview no longer fails with "Photopea did not return a PSD snapshot"
+  when Photopea's script-complete `"done"` arrived before the snapshot binary.
+
+### Changed
+
+- Renamed the primary discovery action to **Preview**.
+- Preview panel now shows a clear detected-element count before splitting.
+
+### Verification
+
+- Automated checks passed on 27 July 2026.
+
 ## [1.0.0] - 2026-07-27
 
 ### Added

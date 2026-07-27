@@ -164,10 +164,34 @@ button:disabled, input:disabled { cursor: wait; opacity: .62; }
   font-weight: 500 !important;
 }
 
+.preview-wrap {
+  display: none;
+  margin-bottom: 12px;
+}
+.preview-wrap.show { display: block; }
+.preview-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+  color: #888;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.preview-title-row strong {
+  color: #d7e9ff;
+  font-family: Consolas, monospace;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+}
 .preview-card {
   display: none;
   overflow: hidden;
-  margin-bottom: 12px;
   border: 1px solid #3a3a3a;
   border-radius: 6px;
   background:

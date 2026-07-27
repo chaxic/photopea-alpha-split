@@ -141,16 +141,26 @@ function panelHtml() {
           </label>
         </div>
 
-        <div class="preview-card${state.scan ? " show" : ""}" id="preview-card">
-          <canvas id="preview-canvas" aria-label="Detected elements preview"></canvas>
+        <div class="preview-wrap${state.scan ? " show" : ""}" id="preview-wrap">
+          <div class="preview-title-row">
+            <span>Preview</span>
+            <strong>${
+              state.scan
+                ? `${count} element${count === 1 ? "" : "s"}`
+                : "Not scanned yet"
+            }</strong>
+          </div>
+          <div class="preview-card${state.scan ? " show" : ""}" id="preview-card">
+            <canvas id="preview-canvas" aria-label="Detected elements preview"></canvas>
+          </div>
+          <p class="preview-meta" id="preview-meta">
+            ${
+              state.scan
+                ? `Colored regions show what will become separate layers · ${state.scan.width}×${state.scan.height}`
+                : "Preview detects separate opaque regions without changing your document."
+            }
+          </p>
         </div>
-        <p class="preview-meta" id="preview-meta">
-          ${
-            state.scan
-              ? `Found ${count} element${count === 1 ? "" : "s"} · ${state.scan.width}×${state.scan.height}`
-              : "Scan the active layer to preview separate alpha regions."
-          }
-        </p>
 
         <div class="panel-actions">
           <div class="status status-${state.statusKind}" role="status" aria-live="polite">
@@ -158,7 +168,7 @@ function panelHtml() {
             <span>${escapeHtml(state.statusText)}</span>
           </div>
           <div class="action-row">
-            <button class="secondary" type="button" data-run="scan"${disabled}>Scan</button>
+            <button class="secondary" type="button" data-run="scan"${disabled}>Preview</button>
             <button class="primary" type="button" data-run="split"${splitDisabled}>Split into layers</button>
           </div>
         </div>
@@ -257,6 +267,7 @@ function clearActiveRequest() {
   state.activeOperation = null;
   state.pendingBinary = null;
   state.pendingDone = false;
+  state.expectBinary = false;
 }
 
 function failActiveRequest(message) {
@@ -368,7 +379,7 @@ function commonHelpers() {
   }`;
 }
 
-function makeMetaScript(requestId) {
+function makeCaptureScript(requestId) {
   return `
 (function () {
   var settings = { requestId: ${JSON.stringify(requestId)} };
@@ -392,25 +403,8 @@ function makeMetaScript(requestId) {
       width: px(documentRef.width),
       height: px(documentRef.height)
     });
-  } catch (error) {
-    send("meta", {
-      ok: false,
-      message: error && error.message ? error.message : String(error)
-    });
-  }
-}());`;
-}
-
-function makeSnapshotScript(requestId) {
-  return `
-(function () {
-  var settings = { requestId: ${JSON.stringify(requestId)} };
-  ${commonHelpers()}
-  try {
-    if (!app.documents || app.documents.length === 0) {
-      throw new Error("Open a document before scanning.");
-    }
     // Untouched PSD snapshot. Isolation never runs in the original workfile.
+    // Echo meta first, then export in the same script so only one "done" follows the binary.
     app.activeDocument.saveToOE("psd");
   } catch (error) {
     send("error", {
@@ -760,11 +754,13 @@ function beginScan() {
   state.scan = null;
   state.pendingBinary = null;
   state.pendingDone = false;
-  setWorking("reading selection", "Reading the active layer…", requestId, "scan");
+  state._scanMeta = null;
+  state.expectBinary = true;
+  setWorking("receiving snapshot", "Reading layer and snapshotting the document…", requestId, "scan");
   render();
 
   try {
-    postScript(makeMetaScript(requestId));
+    postScript(makeCaptureScript(requestId));
   } catch (error) {
     failActiveRequest(
       error && error.message
@@ -892,15 +888,24 @@ function handleBinary(buffer) {
   if (!state.activeRequestId || state.activeOperation !== "scan") return;
   if (state.stage === "receiving snapshot" || state.stage === "receiving file") {
     state.pendingBinary = buffer;
+    if (state.pendingDone) {
+      state.pendingDone = false;
+      handleDone();
+    }
   }
 }
 
 function openSnapshotCopy(requestId, snapshot) {
   const meta = state._scanMeta;
+  if (!meta) {
+    failActiveRequest("Photopea did not return layer details before the snapshot.");
+    return;
+  }
   const temporaryDocumentName = `alpha-split-temp-${requestId}`;
   state._tempName = temporaryDocumentName;
   state.pendingBinary = null;
   state.pendingDone = false;
+  state.expectBinary = false;
 
   setWorking(
     "opening snapshot",
@@ -922,6 +927,7 @@ function prepareTemporaryExport(requestId) {
   const temporaryDocumentName = state._tempName;
   state.pendingBinary = null;
   state.pendingDone = false;
+  state.expectBinary = true;
 
   setWorking(
     "receiving file",
@@ -951,6 +957,7 @@ function closeTemporaryAndAnalyze(requestId, pngBuffer) {
   const temporaryDocumentName = state._tempName;
   state.pendingBinary = null;
   state.pendingDone = false;
+  state.expectBinary = false;
   state._pendingPng = pngBuffer;
 
   setWorking("cleaning up", "Closing the temporary copy…", requestId, "scan");
@@ -974,8 +981,9 @@ function handleDone() {
   if (!state.activeRequestId || state.activeOperation !== "scan") return;
 
   if (state.stage === "receiving snapshot") {
-    if (!state.pendingBinary) {
-      failActiveRequest("Photopea did not return a PSD snapshot.");
+    // Capture script sends: meta echo → PSD ArrayBuffer → "done" (order can vary slightly).
+    if (!state.pendingBinary || !state._scanMeta) {
+      state.pendingDone = true;
       return;
     }
     openSnapshotCopy(state.activeRequestId, state.pendingBinary);
@@ -989,7 +997,7 @@ function handleDone() {
 
   if (state.stage === "receiving file") {
     if (!state.pendingBinary) {
-      failActiveRequest("Photopea did not return a PNG of the active layer.");
+      state.pendingDone = true;
       return;
     }
     closeTemporaryAndAnalyze(state.activeRequestId, state.pendingBinary);
@@ -1011,9 +1019,14 @@ function handleTaggedMessage(payload) {
       return;
     }
     state._scanMeta = payload;
-    setWorking("receiving snapshot", "Snapshotting the document…", payload.requestId, "scan");
-    render();
-    postScript(makeSnapshotScript(payload.requestId));
+    if (
+      state.stage === "receiving snapshot" &&
+      state.pendingBinary &&
+      state.pendingDone
+    ) {
+      state.pendingDone = false;
+      handleDone();
+    }
     return;
   }
 
@@ -1101,7 +1114,7 @@ function bindEvents() {
       if (state.statusKind !== "working") {
         state.statusKind = "idle";
         state.statusText =
-          "Adjust thresholds if needed, then scan the active layer.";
+          "Adjust thresholds if needed, then preview the active layer.";
       }
     });
     input.addEventListener("change", () => {
@@ -1144,6 +1157,6 @@ window.addEventListener("message", (event) => {
 });
 
 state.statusText = state.embedded
-  ? "Select a layer with transparent gaps, then scan."
+  ? "Select a layer with transparent gaps, then preview."
   : "Interactive plugin preview.";
 render();

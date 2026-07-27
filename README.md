@@ -3,7 +3,7 @@
 A lightweight, client-side Photopea sidebar plugin that detects disconnected
 opaque regions through the alpha channel and copies each into its own layer.
 
-**Current version:** v1.0.0  
+**Current version:** v1.0.1  
 **Compatibility:** Tested with Photopea 5.6 · scripting v30  
 **Last verified:** 27 July 2026
 
@@ -24,24 +24,24 @@ opaque regions through the alpha channel and copies each into its own layer.
 1. Run `npm run dev` (serves at `http://127.0.0.1:4178`).
 2. In Photopea, open **Window → Plugins → Add Plugin**.
 3. Select `plugin.local.json` from this folder.
-4. Confirm the panel shows **v1.0.0** and the α icon.
+4. Confirm the panel shows **v1.0.1** and the α icon.
 
 ### Public GitHub Pages
 
-1. Open the [v1.0.0 installer page](https://chaxic.github.io/photopea-alpha-split/?v=1.0.0).
+1. Open the [v1.0.1 installer page](https://chaxic.github.io/photopea-alpha-split/?v=1.0.1).
 2. Download `alpha-split-photopea.json`.
 3. In Photopea, open **Window → Plugins → Add Plugin**.
 4. Select the downloaded JSON file.
-5. Open the panel and confirm that it shows **v1.0.0**.
+5. Open the panel and confirm that it shows **v1.0.1**.
 
 ## Use
 
 1. Select one image layer with transparent gaps between elements.
-2. Choose **Scan** to preview detected regions without changing the workfile.
+2. Choose **Preview** to detect regions without changing the workfile.
 3. Review the tinted preview and count.
 4. Choose **Split into layers** to create one layer per region.
 
-Splitting intentionally adds layers (and can hide the source). Scanning does
+Splitting intentionally adds layers (and can hide the source). Previewing does
 not modify the original document: it snapshots a temporary copy, isolates the
 layer there, then closes only that temporary document.
 
