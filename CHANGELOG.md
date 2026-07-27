@@ -2,6 +2,13 @@
 
 All notable changes to Alpha Split for Photopea are documented here.
 
+## [1.2.3] - 2026-07-27
+
+### Changed
+
+- Plugin sidebar icon now uses thin outline strokes to match Photopea's native
+  plugin icon style.
+
 ## [1.2.2] - 2026-07-27
 
 ### Fixed
