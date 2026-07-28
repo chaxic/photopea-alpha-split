@@ -328,7 +328,8 @@
 
   /**
    * Map analysis-resolution labels onto a full-resolution opaque mask.
-   * opaqueMask may be Uint8Array (1 = opaque) or derived from ImageData alpha.
+   * Opaque pixels that land on an empty analysis cell take the nearest
+   * non-zero analysis label so merges/fills are not erased at edges.
    */
   function propagateLabelsToFullRes(
     analysisLabels,
@@ -341,6 +342,32 @@
     var full = new Int32Array(fullW * fullH);
     var fx;
     var fy;
+    var radius;
+    var dy;
+    var dx;
+    var ny;
+    var nx;
+    var candidate;
+
+    function nearestAnalysisLabel(ax, ay) {
+      var seed = analysisLabels[ay * analysisW + ax];
+      if (seed) return seed;
+      for (radius = 1; radius <= 4; radius++) {
+        for (dy = -radius; dy <= radius; dy++) {
+          ny = ay + dy;
+          if (ny < 0 || ny >= analysisH) continue;
+          for (dx = -radius; dx <= radius; dx++) {
+            if (Math.abs(dx) !== radius && Math.abs(dy) !== radius) continue;
+            nx = ax + dx;
+            if (nx < 0 || nx >= analysisW) continue;
+            candidate = analysisLabels[ny * analysisW + nx];
+            if (candidate) return candidate;
+          }
+        }
+      }
+      return 0;
+    }
+
     for (fy = 0; fy < fullH; fy++) {
       var ay = Math.min(
         analysisH - 1,
@@ -353,7 +380,7 @@
           analysisW - 1,
           Math.floor((fx * analysisW) / fullW),
         );
-        full[fi] = analysisLabels[ay * analysisW + ax];
+        full[fi] = nearestAnalysisLabel(ax, ay);
       }
     }
     return full;
@@ -722,6 +749,39 @@
     };
   }
 
+  /**
+   * Remap label ids to consecutive 1..N in component sort order so preview
+   * names match export filenames (element_01 … element_N).
+   */
+  function compactLabelIds(labels, width, height, minSize, labelColors) {
+    var components = buildComponentsFromLabels(labels, width, height, minSize || 1);
+    var remap = new Map();
+    var newColors = new Map();
+    var i;
+    for (i = 0; i < components.length; i++) {
+      var newId = i + 1;
+      remap.set(components[i].id, newId);
+      if (labelColors && typeof labelColors.get === "function") {
+        var rgb = labelColors.get(components[i].id);
+        if (rgb) newColors.set(newId, rgb.slice ? rgb.slice() : rgb);
+      }
+    }
+    for (i = 0; i < labels.length; i++) {
+      var id = labels[i];
+      if (!id) continue;
+      labels[i] = remap.has(id) ? remap.get(id) : 0;
+    }
+    var compacted = buildComponentsFromLabels(labels, width, height, minSize || 1);
+    if (!newColors.size) {
+      newColors = createDefaultPalette(compacted.map(function (c) { return c.id; }));
+    }
+    return {
+      components: compacted,
+      labelColors: newColors,
+      remap: remap,
+    };
+  }
+
   return {
     labelComponents: labelComponents,
     extractComponent: extractComponent,
@@ -731,6 +791,7 @@
     floodIsland: floodIsland,
     relabelIsland: relabelIsland,
     nextLabelId: nextLabelId,
+    compactLabelIds: compactLabelIds,
     propagateLabelsToFullRes: propagateLabelsToFullRes,
     buildOpaqueMaskFromImageData: buildOpaqueMaskFromImageData,
     labelsFromElements: labelsFromElements,

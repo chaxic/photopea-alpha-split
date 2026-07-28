@@ -11,7 +11,7 @@
 
   return Object.freeze({
     name: "Alpha Split",
-    version: "1.3.8",
+    version: "1.3.11",
     testedPhotopea: "5.6",
     scriptingVersion: "30",
     verifiedDate: "2026-07-28",

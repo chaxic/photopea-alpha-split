@@ -20,6 +20,49 @@
     return text;
   }
 
+  function serializeLabelColors(labelColors) {
+    var out = {};
+    if (!labelColors) return out;
+    if (typeof labelColors.forEach === "function") {
+      labelColors.forEach(function (rgb, id) {
+        if (!rgb || rgb.length < 3) return;
+        out[String(id)] = [
+          Number(rgb[0]) || 0,
+          Number(rgb[1]) || 0,
+          Number(rgb[2]) || 0,
+        ];
+      });
+      return out;
+    }
+    Object.keys(labelColors).forEach(function (key) {
+      var rgb = labelColors[key];
+      if (!rgb || rgb.length < 3) return;
+      out[String(key)] = [
+        Number(rgb[0]) || 0,
+        Number(rgb[1]) || 0,
+        Number(rgb[2]) || 0,
+      ];
+    });
+    return out;
+  }
+
+  function parseLabelColors(raw) {
+    var colors = new Map();
+    if (!raw || typeof raw !== "object") return colors;
+    Object.keys(raw).forEach(function (key) {
+      var id = Number(key);
+      if (!Number.isFinite(id) || id < 1) return;
+      var rgb = raw[key];
+      if (!rgb || rgb.length < 3) return;
+      colors.set(id, [
+        Number(rgb[0]) || 0,
+        Number(rgb[1]) || 0,
+        Number(rgb[2]) || 0,
+      ]);
+    });
+    return colors;
+  }
+
   function buildSplitData(options) {
     var settings = options.settings || {};
     var components = options.components || [];
@@ -42,7 +85,7 @@
       });
     }
 
-    return {
+    var payload = {
       version: 1,
       plugin: PLUGIN_ID,
       pluginVersion: String(options.pluginVersion || ""),
@@ -66,6 +109,9 @@
       idMask: ID_MASK_FILENAME,
       elements: elements,
     };
+    var colors = serializeLabelColors(options.labelColors);
+    if (Object.keys(colors).length) payload.labelColors = colors;
+    return payload;
   }
 
   function validateSplitData(data) {
@@ -129,5 +175,7 @@
     buildSplitData: buildSplitData,
     validateSplitData: validateSplitData,
     applySettingsFromData: applySettingsFromData,
+    serializeLabelColors: serializeLabelColors,
+    parseLabelColors: parseLabelColors,
   });
 }));

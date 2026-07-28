@@ -97,7 +97,11 @@ test("plugin JSON URLs use HTTPS Pages host and === icon prefix", () => {
     const json = JSON.parse(
       fs.readFileSync(path.join(__dirname, "..", fileName), "utf8"),
     );
-    assert.equal(json.name, meta.name);
+    // Published installer keeps the product name; the panel meta may append DEV.
+    assert.ok(
+      meta.name === json.name || meta.name === `${json.name} DEV`,
+      `expected "${json.name}" or "${json.name} DEV", got "${meta.name}"`,
+    );
     assert.match(json.url, /^https:\/\/chaxic\.github\.io\/photopea-alpha-split\/\?v=/);
     assert.match(json.icon, /^===https:\/\/chaxic\.github\.io\/photopea-alpha-split\/assets\/icon\.svg/);
     assert.match(json.url, new RegExp(`v=${meta.version.replaceAll(".", "\\.")}`));
@@ -154,9 +158,10 @@ test("data-layer traffic never occupies the blocking request slot", () => {
   const app = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
   assert.match(app, /sendDataLayerScript/);
   assert.match(app, /dataLayerWaits/);
-  // setWorking disables the panel and starts the stuck-request timer.
+  // Silent background reads must not disable the panel via setWorking.
   assert.doesNotMatch(app, /setWorking\(\s*"reading data"/);
-  assert.doesNotMatch(app, /setWorking\(\s*"saving data"/);
+  // Explicit Save data is a user action and may show progress.
+  assert.match(app, /setWorking\(\s*"saving data"/);
   // The restore read must be deferred, not fired during panel construction.
   assert.match(app, /restoreSavedSettings/);
   assert.doesNotMatch(app, /await requestDataLayerRead\(\);\s*\n\s*if \(layerData\)/);
@@ -167,7 +172,8 @@ test("Import and Position are separate operations", () => {
   assert.match(app, /makeImportEnsureGroupScript/);
   assert.match(app, /makeImportOpenScript/);
   assert.match(app, /makeImportCaptureScript/);
-  assert.match(app, /makePositionByNameScript/);
+  assert.match(app, /makePositionMeasureScript/);
+  assert.match(app, /makePositionApplyScript/);
   assert.match(app, /beginImportElements/);
   assert.match(app, /beginPositionElements/);
   assert.match(app, /data-run="import-elements"/);
@@ -182,9 +188,11 @@ test("Import and Position are separate operations", () => {
   assert.match(app, /renamed = String\(resultLayer\.name\) === expected/);
   assert.match(app, /awaitingOpenDone/);
   assert.match(app, /matchComponentsToElements|CORE\.matchComponentsToElements/);
-  // Placing a Smart Object leaves Free Transform open; commit before rename.
+  // Placing a Smart Object leaves Free Transform open; soft-commit before rename.
+  // executeAction("commit") can abort Photopea's script engine entirely.
   assert.match(app, /commitActiveTransform/);
-  assert.match(app, /stringIDToTypeID\("commit"\)/);
+  assert.match(app, /layer\.translate\(0, 0\)/);
+  assert.doesNotMatch(app, /stringIDToTypeID\("commit"\)/);
 });
 
 // Photopea runs these strings, so a syntax error there is invisible to the panel:
@@ -257,13 +265,22 @@ test("the data layer survives being renamed", () => {
 
 test("Position matches layers by name and uses stored bbox origins", () => {
   const app = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
-  // Text layers can share an element name, so only pixel layers are positioned.
-  assert.match(app, /findPlacedLayerByName\(documentRef, item\.name\)/);
-  assert.match(app, /function findPlacedLayerByName/);
-  assert.match(app, /item\.x - px\(bounds\[0\]\)/);
-  assert.match(app, /item\.y - px\(bounds\[1\]\)/);
+  assert.match(app, /findPlacedLayerByName\(documentRef, settings\.name\)/);
+  assert.match(app, /function positionHelpers/);
+  assert.match(app, /function makePositionMeasureScript/);
+  assert.match(app, /function makePositionApplyScript/);
+  assert.match(app, /position-measure/);
+  assert.match(app, /position-apply/);
+  assert.match(app, /unitValueToNumber/);
+  assert.match(app, /targetX - beforeL/);
+  assert.match(app, /targetY - beforeT/);
   assert.match(app, /elementLayerName/);
-  assert.match(app, /position-done/);
+  assert.match(
+    app,
+    /target\.resize\(\s*Number\(settings\.scaleX\),\s*Number\(settings\.scaleY\),\s*AnchorPosition\.TOPLEFT\s*\)/,
+  );
+  // Soft-commit translate(0,0) hung Position after Import — must stay removed.
+  assert.doesNotMatch(app, /target\.translate\(0,\s*0\)/);
   // Position must not depend on ids recorded during import.
   assert.doesNotMatch(app, /findLayerById\(documentRef, item\.layerId\)/);
 });
@@ -271,36 +288,60 @@ test("Position matches layers by name and uses stored bbox origins", () => {
 test("Restore ID Mask skips the PSD snapshot round trip", () => {
   const app = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
   assert.match(app, /makeLightCaptureScript/);
-  // Restore exports the isolated layer straight from the workfile...
+  assert.match(app, /function scanHelpers/);
+  assert.match(app, /function dataLayerHelpers/);
+  // Restore uses light PNG capture; Generate keeps the PSD snapshot path.
   assert.match(app, /restoreMode\s*\n?\s*\?\s*makeLightCaptureScript/);
-  // ...and puts the layer visibility back afterwards.
-  assert.match(app, /collectVisibility/);
-  assert.match(app, /restoreVisibility/);
-  // Generate keeps the workfile-safe PSD snapshot.
   assert.match(app, /saveToOE\("psd"\)/);
   assert.match(app, /exporting the layer/);
-  // Free Transform left open after Import blocks saveToOE / hide-export forever.
+  // Capture scripts must not inject the full Import helper bundle.
   const captureIdx = app.indexOf("function makeCaptureScript");
   const lightIdx = app.indexOf("function makeLightCaptureScript");
+  const prepareIdx = app.indexOf("function makePrepareTempScript");
   const capture = app.slice(captureIdx, lightIdx);
-  const light = app.slice(lightIdx, app.indexOf("function makePrepareTempScript"));
-  assert.match(capture, /commitActiveTransform\(\)/);
-  assert.match(light, /commitActiveTransform\(\)/);
+  const light = app.slice(lightIdx, prepareIdx);
+  assert.match(capture, /\$\{scanHelpers\(\)\}/);
+  assert.match(light, /\$\{scanHelpers\(\)\}/);
+  assert.doesNotMatch(capture, /\$\{commonHelpers\(\)\}/);
+  assert.doesNotMatch(light, /\$\{commonHelpers\(\)\}/);
+  assert.doesNotMatch(capture, /commitActiveTransform/);
+  assert.doesNotMatch(light, /commitActiveTransform/);
+  // Data-layer upsert/read must not pull Import helpers either (Save data uses this).
+  assert.match(app, /Save data/);
+  assert.doesNotMatch(app, /data-preview-action="update"/);
+  assert.doesNotMatch(app, /data-destination="zip"/);
+  const upsertIdx = app.indexOf("function makeUpsertDataLayerScript");
+  const readIdx = app.indexOf("function makeReadDataLayerScript");
+  const importIdx = app.indexOf("function makeImportEnsureGroupScript");
+  const upsert = app.slice(upsertIdx, readIdx);
+  const read = app.slice(readIdx, importIdx);
+  assert.match(upsert, /\$\{dataLayerHelpers\(\)\}/);
+  assert.match(read, /\$\{dataLayerHelpers\(\)\}/);
+  assert.doesNotMatch(upsert, /\$\{commonHelpers\(\)\}/);
+  assert.doesNotMatch(read, /\$\{commonHelpers\(\)\}/);
+  // Trailing commas in call args break Photopea's older script engine.
+  assert.doesNotMatch(app, /stringIDToTypeID\("targetEnum"\),\s*\)/);
   assert.match(app, /binaryFromMessage/);
 });
 
-test("Generate and Restore ID Mask replace Preview", () => {
+test("Generate ID Mask is the only mask action button", () => {
   const app = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
   assert.match(app, /Generate ID Mask/);
-  assert.match(app, /Restore ID Mask/);
   assert.match(app, /generate-mask/);
-  assert.match(app, /restore-mask/);
   assert.match(app, /buildSchematicScan/);
   assert.match(app, /applyLoadedSplitData/);
-  assert.match(app, /loadDataLayerFromSelection/);
   assert.match(app, /loadDataFileFromFolderOrPicker/);
-  assert.match(app, /scanMode === "restore"/);
+  assert.match(app, /openJsonFilePicker/);
+  assert.match(app, /function dataFileHtml/);
+  // Restore is automatic from the folder mask file — no manual button.
+  assert.doesNotMatch(app, /data-run="restore-mask"/);
+  assert.doesNotMatch(app, />Restore ID Mask</);
+  assert.doesNotMatch(app, /data-run="load-data-layer"/);
   assert.doesNotMatch(app, /data-run="scan"/);
+  // 8-connected stays on in state; UI toggle removed.
+  assert.doesNotMatch(app, /id="eight"/);
+  assert.doesNotMatch(app, /8-connected \(diagonals count\)/);
+  assert.match(app, /eightConnected: true/);
 });
 
 test("JSON data file picker posts ALPHA_SPLIT_JSON_READY", () => {
@@ -406,6 +447,9 @@ test("Export writes ID mask and Restore prefers the folder file", () => {
   assert.match(app, /continueExportWithArtwork/);
   assert.match(app, /encodeLabelsToImageData/);
   assert.match(app, /decodeLabelsFromImageData/);
+  // Save data must refresh the ID mask so auto-load matches the JSON.
+  assert.match(app, /resolveFullResLabelsForSave/);
+  assert.match(app, /Saving \$\{DATA\.DATA_FILENAME\} \+ \$\{DATA\.ID_MASK_FILENAME\}/);
 });
 
 test("buildSplitData creates sequential filenames and bboxes", () => {
@@ -425,6 +469,10 @@ test("buildSplitData creates sequential filenames and bboxes", () => {
     height: 200,
     pluginVersion: "1.3.0",
     exported: true,
+    labelColors: new Map([
+      [3, [10, 20, 30]],
+      [7, [40, 50, 60]],
+    ]),
   });
   assert.equal(built.version, 1);
   assert.equal(built.plugin, "alpha-split");
@@ -433,6 +481,10 @@ test("buildSplitData creates sequential filenames and bboxes", () => {
   assert.equal(built.elements[0].x, 10);
   assert.equal(built.elements[0].width, 10);
   assert.equal(built.elements[1].filename, "element_02.png");
+  assert.deepEqual(built.labelColors["3"], [10, 20, 30]);
+  assert.deepEqual(built.labelColors["7"], [40, 50, 60]);
+  const parsed = data.parseLabelColors(built.labelColors);
+  assert.deepEqual(parsed.get(3), [10, 20, 30]);
   assert.equal(data.validateSplitData(built).ok, true);
 });
 
@@ -477,6 +529,28 @@ test("validateSplitData requires a full bounding box per element", () => {
     }).ok,
     false,
   );
+});
+
+test("compactLabelIds renumbers to consecutive 1..N", () => {
+  const labels = new Int32Array(8 * 8);
+  for (let y = 1; y <= 2; y++) {
+    for (let x = 1; x <= 2; x++) labels[y * 8 + x] = 7;
+  }
+  for (let y = 5; y <= 6; y++) {
+    for (let x = 5; x <= 6; x++) labels[y * 8 + x] = 38;
+  }
+  const colors = new Map([
+    [7, [1, 2, 3]],
+    [38, [4, 5, 6]],
+  ]);
+  const result = core.compactLabelIds(labels, 8, 8, 1, colors);
+  assert.equal(result.components.length, 2);
+  assert.equal(result.components[0].id, 1);
+  assert.equal(result.components[1].id, 2);
+  assert.equal([...labels].includes(38), false);
+  assert.equal([...labels].includes(7), false);
+  assert.deepEqual(result.labelColors.get(1), [1, 2, 3]);
+  assert.deepEqual(result.labelColors.get(2), [4, 5, 6]);
 });
 
 test("floodIsland respects 4 vs 8 connectivity", () => {
@@ -541,6 +615,19 @@ test("propagateLabelsToFullRes maps 2x2 analysis onto 4x4", () => {
   assert.equal(full[8], 3);
   assert.equal(full[10], 4);
   assert.equal(full[15], 4);
+});
+
+test("propagate keeps merged silhouette when analysis cell is empty", () => {
+  // Full-res has two islands. Analysis only labelled the left cell; without a
+  // nearest-label search the right island would be wiped to 0 on propagate.
+  const analysis = new Int32Array(2 * 2);
+  analysis[0] = 1;
+  const opaque = new Uint8Array(4 * 4).fill(1);
+  const full = core.propagateLabelsToFullRes(analysis, 2, 2, 4, 4, opaque);
+  const ids = new Set([...full].filter(Boolean));
+  assert.equal(ids.size, 1);
+  assert.equal(full[0], 1);
+  assert.equal(full[3], 1);
 });
 
 test("createRandomPalette returns a colour for each label id", () => {

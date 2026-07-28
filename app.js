@@ -40,6 +40,9 @@ const state = {
   folderName: "",
   folderPermission: "none",
   folderData: null,
+  // Shown in the Data card: which JSON is active and where it came from.
+  dataFileName: "",
+  dataFileSource: "",
   exportAfterFolderChoice: false,
   // "import" | "position" | null — action to resume once folder access is granted.
   afterFolderChoice: null,
@@ -51,6 +54,8 @@ const state = {
   stage: "idle",
   statusKind: "idle",
   statusText: "",
+  // Shown in the footer while detecting/loading folder JSON + ID mask.
+  bootHint: "",
   scan: null,
   previewObserver: null,
   activeRequestId: null,
@@ -133,54 +138,106 @@ function zipIcon() {
     </svg>`;
 }
 
-function destinationHtml(disabled) {
-  const folderSelected = state.destination === "folder" ? " selected" : "";
-  const zipSelected = state.destination === "zip" ? " selected" : "";
+function dataFileIcon() {
+  return `
+    <svg viewBox="0 0 20 20" aria-hidden="true">
+      <path d="M5 2.8h7l3 3v11.4H5z"></path>
+      <path d="M12 2.8v3h3M7.2 10.2h5.6M7.2 13h5.6"></path>
+    </svg>`;
+}
 
-  let folderBody;
-  if (state.destination === "zip") {
-    folderBody = `
-      <div class="destination-card">
-        <div class="destination-icon">${zipIcon()}</div>
-        <div class="destination-copy">
-          <strong>ZIP download</strong>
-          <span>One archive with every cropped PNG</span>
-        </div>
-      </div>`;
+function statusCheckIcon() {
+  return `<svg viewBox="0 0 18 18" aria-hidden="true"><path d="M4.2 9.2l3.2 3.2 6.4-6.8"></path></svg>`;
+}
+
+function statusCrossIcon() {
+  return `<svg viewBox="0 0 18 18" aria-hidden="true"><path d="M5 5l8 8M13 5L5 13"></path></svg>`;
+}
+
+function folderPathLabel() {
+  if (!state.folderName) return "";
+  return `…/${state.folderName}`;
+}
+
+function dataPathLabel() {
+  const file = state.dataFileName || DATA.DATA_FILENAME;
+  if (state.folderName) return `${state.folderName}/${file}`;
+  return file;
+}
+
+function hasLoadedData() {
+  return !!(
+    state.dataFileName ||
+    state.folderData ||
+    (state.latestSplitData &&
+      state.latestSplitData.elements &&
+      state.latestSplitData.elements.length)
+  );
+}
+
+function destinationHtml(disabled) {
+  const hasFolder = !!state.folderName;
+  const title = hasFolder ? state.folderName : "Export folder not selected";
+  const pathLine = hasFolder
+    ? folderPathLabel()
+    : "Required — choose where PNG files and data are written";
+  const cardClass = hasFolder
+    ? "destination-card destination-required destination-ok"
+    : "destination-card destination-required destination-missing";
+
+  return `
+    <p class="section-label">Destination <span class="required-star" title="Required">*</span></p>
+    <div class="${cardClass}">
+      <div class="destination-icon status-icon ${hasFolder ? "status-ok" : "status-empty"}">${
+        hasFolder ? statusCheckIcon() : statusCrossIcon()
+      }</div>
+      <div class="destination-copy">
+        <strong title="${escapeHtml(title)}">${escapeHtml(title)}</strong>
+        <span class="path-line" title="${escapeHtml(pathLine)}">${escapeHtml(pathLine)}</span>
+      </div>
+      <button class="small-button" id="choose-folder" type="button"${disabled}>
+        ${hasFolder ? "Change" : "Choose"}
+      </button>
+    </div>`;
+}
+
+function dataFileHtml(disabled) {
+  const loaded = hasLoadedData();
+  const title = loaded
+    ? state.dataFileName || DATA.DATA_FILENAME
+    : DATA.DATA_FILENAME;
+  let subtitle;
+  if (!loaded) {
+    subtitle = `Not loaded — expected JSON file “${DATA.DATA_FILENAME}”`;
+  } else if (state.dataFileSource === "folder" && state.folderName) {
+    subtitle = dataPathLabel();
+  } else if (state.dataFileSource === "file") {
+    subtitle = dataPathLabel();
+  } else if (state.dataFileSource === "document") {
+    subtitle = "Loaded from document";
+  } else if (state.folderName) {
+    subtitle = dataPathLabel();
   } else {
-    const title = state.folderName || "Export folder not selected";
-    let subtitle = "Choose where PNG files will be written";
-    if (state.folderPermission === "granted") {
-      subtitle = "Remembered by this browser";
-    } else if (state.folderName) {
-      subtitle = "Access will be restored in a secure folder window";
-    }
-    folderBody = `
-      <div class="destination-card">
-        <div class="destination-icon">${folderIcon()}</div>
-        <div class="destination-copy">
-          <strong title="${escapeHtml(title)}">${escapeHtml(title)}</strong>
-          <span>${escapeHtml(subtitle)}</span>
-        </div>
-        <button class="small-button" id="choose-folder" type="button"${disabled}>
-          ${state.folderName ? "Change" : "Choose"}
-        </button>
-      </div>`;
+    subtitle = title;
   }
 
   return `
-    <p class="section-label">Destination</p>
-    <div class="destination-toggle" role="group" aria-label="Export destination">
-      <button type="button" class="destination-option${folderSelected}" data-destination="folder"${disabled}>Folder</button>
-      <button type="button" class="destination-option${zipSelected}" data-destination="zip"${disabled}>ZIP</button>
-    </div>
-    ${folderBody}`;
+    <p class="section-label">Data</p>
+    <div class="destination-card data-card ${loaded ? "data-loaded" : "data-empty"}">
+      <div class="destination-icon status-icon ${loaded ? "status-ok" : "status-empty"}">${
+        loaded ? statusCheckIcon() : statusCrossIcon()
+      }</div>
+      <div class="destination-copy">
+        <strong title="${escapeHtml(title)}">${escapeHtml(title)}</strong>
+        <span class="path-line" title="${escapeHtml(subtitle)}">${escapeHtml(subtitle)}</span>
+      </div>
+      <button class="small-button" type="button" data-run="load-data-file"${disabled}>
+        ${loaded ? "Change" : "Load"}
+      </button>
+    </div>`;
 }
 
 function sampleIndicatorHtml() {
-  if (state.sampledLabel === "new") {
-    return `<span class="sample-swatch sample-swatch-new" aria-hidden="true"></span><span>Sample: New label</span>`;
-  }
   if (typeof state.sampledLabel === "number" && state.sampledLabel > 0) {
     const color =
       (state.scan &&
@@ -196,8 +253,8 @@ function previewToolbarHtml(disabled) {
   if (!state.scan || state.scan.schematic) return "";
   const sampleActive = state.editTool === "sample" ? " tool-active" : "";
   const fillActive = state.editTool === "fill" ? " tool-active" : "";
-  const updateDisabled =
-    disabled || !(state.scan.labelsEdited && !state.scan.labelsCommitted)
+  const saveDisabled =
+    disabled || !state.scan.components || !state.scan.components.length
       ? " disabled"
       : "";
   const dirty =
@@ -208,13 +265,15 @@ function previewToolbarHtml(disabled) {
   return `
     <div class="preview-toolbar" role="toolbar" aria-label="ID Mask edit tools">
       <button type="button" class="tool-button" data-preview-action="randomize"${disabled}>Randomize colors</button>
+      <button type="button" class="tool-button" data-preview-action="reassign"${disabled}>Reassign Elements</button>
       <button type="button" class="tool-button${sampleActive}" data-preview-action="sample"${disabled}>Sample</button>
       <button type="button" class="tool-button${fillActive}" data-preview-action="fill"${disabled}>Fill</button>
-      <button type="button" class="tool-button" data-preview-action="update"${updateDisabled}>Update</button>
+    </div>
+    <div class="preview-toolbar-save">
+      <button type="button" class="tool-button tool-button-wide" data-preview-action="save-data"${saveDisabled}>Save data</button>
     </div>
     <div class="sample-row">
       <div class="sample-indicator">${sampleIndicatorHtml()}</div>
-      <button type="button" class="small-button" data-preview-action="sample-new"${disabled}>New</button>
       ${dirty}
     </div>`;
 }
@@ -248,8 +307,6 @@ function panelHtml() {
   const folderElementsDisabled = canUseFolderElements ? "" : " disabled";
   const count = state.scan ? state.scan.components.length : 0;
   const canRestoreMask = hasLoadedSplitData();
-  const idMaskLabel = canRestoreMask ? "Restore ID Mask" : "Generate ID Mask";
-  const idMaskRun = canRestoreMask ? "restore-mask" : "generate-mask";
   const showPreview = !!(state.scan || canRestoreMask);
 
   return `
@@ -282,20 +339,8 @@ function panelHtml() {
           <input id="prefix" value="${escapeHtml(state.prefix)}" placeholder="element"${disabled} />
         </label>
 
-        <div class="check-row">
-          <label class="check-label">
-            <input id="eight" type="checkbox" ${state.eightConnected ? "checked" : ""}${disabled} />
-            <span>8-connected (diagonals count)</span>
-          </label>
-        </div>
-
         ${destinationHtml(disabled)}
-
-        <p class="section-label">Data</p>
-        <div class="data-row">
-          <button class="secondary small-action" type="button" data-run="load-data-layer"${disabled}>Load data layer</button>
-          <button class="secondary small-action" type="button" data-run="load-data-file"${disabled}>Load data file</button>
-        </div>
+        ${dataFileHtml(disabled)}
 
         <div class="preview-wrap${showPreview ? " show" : ""}" id="preview-wrap">
           <div class="preview-title-row">
@@ -318,12 +363,14 @@ function panelHtml() {
               state.scan
                 ? state.scan.schematic
                   ? `Schematic from saved boxes · ${state.scan.width}×${state.scan.height}`
-                  : `Click to Sample/Fill · ${state.scan.width}×${state.scan.height}${
+                  : `Click empty space to clear sample · Sample/Fill · ${state.scan.width}×${state.scan.height}${
                       state.scan.analysisScale < 0.999
                         ? ` · edit @ ${state.scan.analysisWidth}×${state.scan.analysisHeight}`
                         : ""
                     }`
-                : "Generate a new ID mask, or restore one from loaded Alpha Split data."
+                : state.bootHint
+                  ? escapeHtml(state.bootHint)
+                  : `Looking for ${DATA.DATA_FILENAME} in the destination folder when selected.`
             }
           </p>
         </div>
@@ -334,16 +381,9 @@ function panelHtml() {
             <span>${escapeHtml(state.statusText)}</span>
           </div>
           <div class="action-row">
-            <button class="secondary" type="button" data-run="${idMaskRun}"${disabled}>${idMaskLabel}</button>
+            <button class="secondary" type="button" data-run="generate-mask"${disabled}>Generate ID Mask</button>
             <button class="primary" type="button" data-run="export"${exportDisabled}>Export elements</button>
           </div>
-          ${
-            canRestoreMask
-              ? `<div class="action-row action-row-single">
-            <button class="secondary" type="button" data-run="generate-mask"${disabled}>Generate ID Mask</button>
-          </div>`
-              : ""
-          }
           <div class="action-row">
             <button class="secondary" type="button" data-run="import-elements"${folderElementsDisabled}>Import Elements</button>
             <button class="secondary" type="button" data-run="position-elements"${folderElementsDisabled}>Position Elements</button>
@@ -354,7 +394,8 @@ function panelHtml() {
       <footer class="panel-footer">
         <div class="panel-footer-copy">
           <span>Tested with Photopea ${escapeHtml(META.testedPhotopea)} · scripting v${escapeHtml(META.scriptingVersion)}</span>
-          <span>Export writes ID mask · Restore loads it from the folder</span>
+          <span>Save data writes JSON + ID mask · Export writes element PNGs</span>
+          <span class="boot-hint">${escapeHtml(state.bootHint || "Folder JSON is the source of truth.")}</span>
         </div>
         <a href="${META.repositoryUrl}" target="_blank" rel="noreferrer" title="View the Alpha Split source code on GitHub">
           View source <span aria-hidden="true">↗</span>
@@ -384,7 +425,7 @@ function installerHtml() {
           <span>Alpha detection</span>
           <span>Connected components</span>
           <span>Safe preview</span>
-          <span>Folder or ZIP</span>
+          <span>Folder export</span>
           <span>Import and position</span>
         </div>
         <div class="install-actions">
@@ -438,8 +479,7 @@ function readInputs() {
   state.alphaThreshold = readNumber("#alpha", state.alphaThreshold);
   state.minSize = readNumber("#min-size", state.minSize);
   state.prefix = document.querySelector("#prefix")?.value ?? state.prefix;
-  state.eightConnected =
-    document.querySelector("#eight")?.checked ?? state.eightConnected;
+  // 8-connected stays on by default; the UI toggle was removed.
 
   if (
     state.scan &&
@@ -462,6 +502,7 @@ function clearActiveRequest() {
   state.expectBinary = false;
   // Import jobs hold a PNG data URL per pending element, so drop them with the request.
   state._importJob = null;
+  state._positionJob = null;
   state._positionGroupName = null;
   state._exportAfterArtwork = null;
 }
@@ -514,16 +555,59 @@ function postBinary(buffer) {
   window.parent.postMessage(buffer, "*");
 }
 
+function pxHelperSource() {
+  // Photopea UnitValue is {Ig:"UnitValue", n:<px>, aBA:"px"}. Direct property
+  // access (.n / .as) has hung Position scripts after reading bounds. Extract the
+  // number via JSON.stringify, which Photopea already uses successfully in echoToOE.
+  return `
+  function px(value) {
+    if (typeof value === "number" && !isNaN(value)) return value;
+    if (value == null) return 0;
+    try {
+      var raw = JSON.stringify(value);
+      if (typeof raw === "string") {
+        var m = raw.match(/"n"\\s*:\\s*(-?\\d+(?:\\.\\d+)?)/);
+        if (m) return Number(m[1]);
+      }
+    } catch (_) {}
+    try {
+      var text = String(value);
+      var match = text.match(/-?\\d+(\\.\\d+)?/);
+      if (match) return Number(match[0]);
+    } catch (_) {}
+    return 0;
+  }`;
+}
+
+function positionHelpers() {
+  // Keep Position scripts tiny. Full scanHelpers previously pulled in a lot of
+  // unused walkers; Position only needs send + px + a name lookup.
+  return `
+  var messageTag = ${JSON.stringify(MESSAGE_PREFIX)};
+  ${pxHelperSource()}
+  function send(type, object) {
+    object.type = type;
+    object.requestId = settings && settings.requestId ? settings.requestId : object.requestId;
+    app.echoToOE(messageTag + JSON.stringify(object));
+  }
+  function findPlacedLayerByName(container, wantedName) {
+    for (var i = 0; i < container.layers.length; i++) {
+      var item = container.layers[i];
+      if (item.typename === "ArtLayer" && item.name === wantedName) return item;
+      if (item.typename === "LayerSet") {
+        var nested = findPlacedLayerByName(item, wantedName);
+        if (nested) return nested;
+      }
+    }
+    return null;
+  }`;
+}
+
 function commonHelpers() {
   return `
   var resultTag = ${JSON.stringify(RESULT_PREFIX)};
   var messageTag = ${JSON.stringify(MESSAGE_PREFIX)};
-  function px(value) {
-    if (typeof value === "number") return value;
-    try { return value.as("px"); } catch (_) {}
-    try { return Number(value.value); } catch (_) {}
-    return Number(value);
-  }
+  ${pxHelperSource()}
   function layerId(layer) {
     try { return Number(layer.id); } catch (_) { return -1; }
   }
@@ -554,31 +638,9 @@ function commonHelpers() {
     return null;
   }
   function commitActiveTransform() {
-    // app.open(..., true) often leaves Free Transform open. While it is modal,
-    // later scripts can hang forever and never echo import-placed.
-    var DM = typeof DialogModes !== "undefined" ? DialogModes.NO : undefined;
-    try {
-      executeAction(stringIDToTypeID("commit"), undefined, DM);
-      return true;
-    } catch (_) {}
-    try {
-      executeAction(charIDToTypeID("ExeF"), undefined, DM);
-      return true;
-    } catch (_) {}
-    try {
-      var desc = new ActionDescriptor();
-      var ref = new ActionReference();
-      ref.putEnumerated(
-        stringIDToTypeID("layer"),
-        stringIDToTypeID("ordinal"),
-        stringIDToTypeID("targetEnum"),
-      );
-      desc.putReference(stringIDToTypeID("null"), ref);
-      desc.putUnitDouble(stringIDToTypeID("width"), stringIDToTypeID("percentUnit"), 100);
-      desc.putUnitDouble(stringIDToTypeID("height"), stringIDToTypeID("percentUnit"), 100);
-      executeAction(stringIDToTypeID("transform"), desc, DM);
-      return true;
-    } catch (_) {}
+    // Prefer a soft commit. executeAction("commit") can abort Photopea's whole
+    // script engine (try/catch does not always catch it), which left Import
+    // stuck on "Naming…" with no import-placed echo.
     try {
       var layer = app.activeDocument.activeLayer;
       if (layer && layer.typename === "ArtLayer") layer.translate(0, 0);
@@ -782,17 +844,167 @@ function commonHelpers() {
   }`;
 }
 
+// Capture/Generate/Restore only need a small helper set. Import helpers (commit,
+// moveIntoGroup, …) stay out of these scripts — Photopea's engine is older and a
+// syntax error anywhere in the injected helpers aborts the whole script with a
+// bare "done" and no echoToOE.
+function scanHelpers() {
+  return `
+  var messageTag = ${JSON.stringify(MESSAGE_PREFIX)};
+  ${pxHelperSource()}
+  function layerId(layer) {
+    try { return Number(layer.id); } catch (_) { return -1; }
+  }
+  function documentSource(documentRef) {
+    try { return String(documentRef.source || ""); } catch (_) { return ""; }
+  }
+  function findLayerById(container, wantedId) {
+    if (wantedId === null || wantedId === undefined || wantedId < 0) return null;
+    for (var i = 0; i < container.layers.length; i++) {
+      var item = container.layers[i];
+      if (layerId(item) === Number(wantedId)) return item;
+      if (item.typename === "LayerSet") {
+        var nested = findLayerById(item, wantedId);
+        if (nested) return nested;
+      }
+    }
+    return null;
+  }
+  function findDocumentByName(name, skip) {
+    if (!app.documents) return null;
+    for (var i = 0; i < app.documents.length; i++) {
+      var documentRef = app.documents[i];
+      if (skip && documentRef === skip) continue;
+      if (String(documentRef.name || "") === name) return documentRef;
+    }
+    return null;
+  }
+  function findSourceDocument(settings, temporaryDocument) {
+    if (!app.documents) return null;
+    if (settings.sourceDocumentSource) {
+      for (var i = 0; i < app.documents.length; i++) {
+        var documentRef = app.documents[i];
+        if (documentRef === temporaryDocument) continue;
+        if (documentSource(documentRef) === settings.sourceDocumentSource) return documentRef;
+      }
+    }
+    return findDocumentByName(settings.sourceDocumentName, temporaryDocument);
+  }
+  function hideEveryLayer(container) {
+    for (var i = 0; i < container.layers.length; i++) {
+      var item = container.layers[i];
+      if (item.typename === "LayerSet") hideEveryLayer(item);
+      try { item.visible = false; } catch (_) {}
+    }
+  }
+  function revealWithParents(layer, documentRef) {
+    var current = layer;
+    while (current && current !== documentRef) {
+      try { current.visible = true; } catch (_) {}
+      try { current = current.parent; } catch (_) { current = null; }
+    }
+  }
+  function collectVisibility(container, out) {
+    for (var i = 0; i < container.layers.length; i++) {
+      var item = container.layers[i];
+      var wasVisible = true;
+      try { wasVisible = !!item.visible; } catch (_) {}
+      out.push({ id: layerId(item), visible: wasVisible });
+      if (item.typename === "LayerSet") collectVisibility(item, out);
+    }
+  }
+  function applyVisibilityMap(container, map) {
+    for (var i = 0; i < container.layers.length; i++) {
+      var item = container.layers[i];
+      var key = String(layerId(item));
+      if (map[key] !== undefined) {
+        try { item.visible = map[key]; } catch (_) {}
+      }
+      if (item.typename === "LayerSet") applyVisibilityMap(item, map);
+    }
+  }
+  function restoreVisibility(container, list) {
+    var map = {};
+    for (var i = 0; i < list.length; i++) {
+      map[String(list[i].id)] = list[i].visible;
+    }
+    applyVisibilityMap(container, map);
+  }
+  function send(type, object) {
+    object.type = type;
+    object.requestId = settings && settings.requestId ? settings.requestId : object.requestId;
+    app.echoToOE(messageTag + JSON.stringify(object));
+  }`;
+}
+
+// Data-layer read/write only — keep Import helpers out of these scripts.
+function dataLayerHelpers() {
+  return `
+  var messageTag = ${JSON.stringify(MESSAGE_PREFIX)};
+  function layerId(layer) {
+    try { return Number(layer.id); } catch (_) { return -1; }
+  }
+  function isTextLayer(layer) {
+    try {
+      if (typeof LayerKind !== "undefined" && LayerKind.TEXT) {
+        var kind = layer.kind;
+        if (kind) return kind === LayerKind.TEXT;
+      }
+    } catch (_) {}
+    try {
+      return String(layer.textItem.contents || "").length > 0;
+    } catch (_) {}
+    return false;
+  }
+  function layerText(layer) {
+    try { return String(layer.textItem.contents || ""); } catch (_) { return ""; }
+  }
+  function findArtLayerByName(container, wantedName) {
+    for (var i = 0; i < container.layers.length; i++) {
+      var item = container.layers[i];
+      if (item.typename === "ArtLayer" && item.name === wantedName) return item;
+      if (item.typename === "LayerSet") {
+        var nested = findArtLayerByName(item, wantedName);
+        if (nested) return nested;
+      }
+    }
+    return null;
+  }
+  function findDataLayerByText(container) {
+    for (var i = 0; i < container.layers.length; i++) {
+      var item = container.layers[i];
+      if (item.typename === "ArtLayer" && isTextLayer(item)) {
+        var text = layerText(item);
+        if (text.indexOf("alpha-split") >= 0 && text.indexOf("elements") >= 0) return item;
+      }
+      if (item.typename === "LayerSet") {
+        var nested = findDataLayerByText(item);
+        if (nested) return nested;
+      }
+    }
+    return null;
+  }
+  function findDataLayer(documentRef, layerName) {
+    var layer = findArtLayerByName(documentRef, layerName);
+    if (layer && isTextLayer(layer)) return layer;
+    return layer || findDataLayerByText(documentRef);
+  }
+  function send(type, object) {
+    object.type = type;
+    object.requestId = settings && settings.requestId ? settings.requestId : object.requestId;
+    app.echoToOE(messageTag + JSON.stringify(object));
+  }`;
+}
+
 function makeCaptureScript(requestId) {
   return `
 (function () {
   var settings = { requestId: ${JSON.stringify(requestId)} };
-  ${commonHelpers()}
+  ${scanHelpers()}
   try {
     if (!app.documents || app.documents.length === 0) {
       throw new Error("Open a document before scanning.");
     }
-    // Import / place can leave Free Transform open; saveToOE then never finishes.
-    commitActiveTransform();
     var documentRef = app.activeDocument;
     var layer = documentRef.activeLayer;
     if (!layer) throw new Error("Select a layer first.");
@@ -827,15 +1039,14 @@ function makeLightCaptureScript(requestId) {
   return `
 (function () {
   var settings = { requestId: ${JSON.stringify(requestId)} };
-  ${commonHelpers()}
+  ${scanHelpers()}
   var documentRef = null;
   var visibility = [];
   try {
+    send("probe", { ok: true, step: "script-start" });
     if (!app.documents || app.documents.length === 0) {
       throw new Error("Open a document before restoring the ID mask.");
     }
-    // Same Free Transform trap as Generate — commit before hide/export.
-    commitActiveTransform();
     documentRef = app.activeDocument;
     var layer = documentRef.activeLayer;
     if (!layer) throw new Error("Select a layer first.");
@@ -886,7 +1097,7 @@ function makePrepareTempScript({
 (function () {
   var settings = ${payload};
   var temporaryDocument = null;
-  ${commonHelpers()}
+  ${scanHelpers()}
   try {
     if (!app.documents || app.documents.length === 0) {
       throw new Error("Photopea could not open the temporary PSD snapshot.");
@@ -939,7 +1150,7 @@ function makeCloseTempScript({
   return `
 (function () {
   var settings = ${payload};
-  ${commonHelpers()}
+  ${scanHelpers()}
   try {
     var temporaryDocument = findDocumentByName(settings.temporaryDocumentName, null);
     var sourceDocument = findSourceDocument(settings, temporaryDocument);
@@ -981,24 +1192,41 @@ function makeUpsertDataLayerScript({ requestId, jsonText }) {
   return `
 (function () {
   var settings = ${payload};
-  ${commonHelpers()}
+  ${dataLayerHelpers()}
   try {
+    send("probe", { ok: true, step: "upsert-start" });
     if (!app.documents || app.documents.length === 0) {
       throw new Error("Open a document before saving Alpha Split data.");
     }
     var documentRef = app.activeDocument;
     var layer = findDataLayer(documentRef, settings.layerName);
+    send("probe", { ok: true, step: layer ? "upsert-found" : "upsert-create" });
     if (!layer) {
+      // Do not set layer.kind outside try/catch — Photopea can abort the whole
+      // script on an illegal kind change, which left Save data with JSON only.
       layer = documentRef.artLayers.add();
-      layer.kind = LayerKind.TEXT;
+      try { layer.name = settings.layerName; } catch (_) {}
+      try {
+        if (typeof LayerKind !== "undefined" && LayerKind.TEXT) {
+          layer.kind = LayerKind.TEXT;
+        }
+      } catch (_) {}
+    } else {
+      try { layer.name = settings.layerName; } catch (_) {}
+      try {
+        if (typeof LayerKind !== "undefined" && LayerKind.TEXT) {
+          layer.kind = LayerKind.TEXT;
+        }
+      } catch (_) {}
     }
-    try { layer.kind = LayerKind.TEXT; } catch (_) {}
-    try { layer.name = settings.layerName; } catch (_) {}
-    try { layer.textItem.contents = settings.jsonText; } catch (textError) {
+    send("probe", { ok: true, step: "upsert-write-text" });
+    try {
+      layer.textItem.contents = settings.jsonText;
+    } catch (textError) {
       throw new Error("Could not write the Alpha Split data layer text.");
     }
     try { layer.visible = false; } catch (_) {}
-    send("data-layer", { ok: true, written: true });
+    send("data-layer", { ok: true, written: true, layerName: settings.layerName });
   } catch (error) {
     send("data-layer", {
       ok: false,
@@ -1016,7 +1244,7 @@ function makeReadDataLayerScript(requestId) {
   return `
 (function () {
   var settings = ${payload};
-  ${commonHelpers()}
+  ${dataLayerHelpers()}
   try {
     if (!app.documents || app.documents.length === 0) {
       send("data-layer", { ok: true, found: false, jsonText: null });
@@ -1135,8 +1363,10 @@ function makeImportCaptureScript({
     if (!app.documents || app.documents.length === 0) {
       throw new Error("The source document is no longer open.");
     }
-    // Must run before any layer walk — Free Transform blocks scripts otherwise.
+    // Soft-dismiss Free Transform if Photopea left it open after place.
+    // executeAction-based commits can abort the whole script with no echo.
     commitActiveTransform();
+    send("probe", { ok: true, step: "naming-start", index: settings.index, name: settings.name });
 
     var documentRef = app.activeDocument;
     var known = {};
@@ -1177,32 +1407,37 @@ function makeImportCaptureScript({
       return out;
     }
 
-    var candidates = collectCandidates(documentRef, []);
+    var candidates = [];
     var resultLayer = null;
-    // Prefer a fresh "image" Smart Object over an already-named leftover.
-    for (var c = 0; c < candidates.length; c++) {
-      if (String(candidates[c].name) === "image") {
-        resultLayer = candidates[c];
-        break;
+    // Prefer the active layer first — a full stack walk can hang while Free Transform
+    // is still modal after app.open(..., true).
+    try {
+      var activeFirst = documentRef.activeLayer;
+      if (activeFirst && isCandidate(activeFirst) && isNamedForPlacement(activeFirst)) {
+        resultLayer = activeFirst;
       }
-    }
+    } catch (_) {}
+
     if (!resultLayer) {
-      for (var c2 = 0; c2 < candidates.length; c2++) {
-        if (isNamedForPlacement(candidates[c2])) {
-          resultLayer = candidates[c2];
+      candidates = collectCandidates(documentRef, []);
+      // Prefer a fresh "image" Smart Object over an already-named leftover.
+      for (var c = 0; c < candidates.length; c++) {
+        if (String(candidates[c].name) === "image") {
+          resultLayer = candidates[c];
           break;
         }
       }
-    }
-    // Photopea calls a freshly placed Smart Object "image"; if it ever picks another
-    // name, a single new pixel layer is still unambiguous once the baseline is known.
-    if (!resultLayer && knownList.length > 0 && candidates.length === 1) {
-      resultLayer = candidates[0];
-    }
-    if (!resultLayer) {
-      var active = null;
-      try { active = documentRef.activeLayer; } catch (_) { active = null; }
-      if (active && isCandidate(active) && isNamedForPlacement(active)) resultLayer = active;
+      if (!resultLayer) {
+        for (var c2 = 0; c2 < candidates.length; c2++) {
+          if (isNamedForPlacement(candidates[c2])) {
+            resultLayer = candidates[c2];
+            break;
+          }
+        }
+      }
+      if (!resultLayer && knownList.length > 0 && candidates.length === 1) {
+        resultLayer = candidates[0];
+      }
     }
 
     if (!resultLayer) {
@@ -1222,22 +1457,19 @@ function makeImportCaptureScript({
     var expected = String(settings.name);
     // Already correctly named from a prior attempt — claim it and move on.
     if (String(resultLayer.name) === expected) {
-      var groupedEarly = false;
-      try {
-        var groupEarly = resolveGroup(documentRef, settings.groupId, settings.groupName);
-        if (groupEarly) groupedEarly = moveIntoGroup(resultLayer, groupEarly);
-      } catch (_) {}
       try { resultLayer.visible = true; } catch (_) {}
       send("import-placed", {
         ok: true,
         index: settings.index,
         total: settings.total,
         name: expected,
-        grouped: groupedEarly,
+        grouped: false,
         layerId: layerId(resultLayer)
       });
       return;
     }
+
+    send("probe", { ok: true, step: "naming-found", name: String(resultLayer.name) });
 
     // Free the expected name if a leftover unknown layer is sitting on it.
     try {
@@ -1254,6 +1486,7 @@ function makeImportCaptureScript({
     } catch (_) {
       renamed = false;
     }
+    send("probe", { ok: true, step: "naming-renamed", renamed: renamed, name: String(resultLayer.name) });
     if (!renamed) {
       send("import-placed", {
         ok: false,
@@ -1263,14 +1496,8 @@ function makeImportCaptureScript({
       return;
     }
 
-    // Grouping is cosmetic: never let it break the echo that advances the queue.
-    var grouped = false;
-    try {
-      var group = resolveGroup(documentRef, settings.groupId, settings.groupName);
-      if (group) grouped = moveIntoGroup(resultLayer, group);
-    } catch (_) {
-      grouped = false;
-    }
+    // Do not moveIntoGroup here — PLACE* while Free Transform is open can hang
+    // the script with no echo. Position Elements groups and places by name.
     try { resultLayer.visible = true; } catch (_) {}
     try { documentRef.activeLayer = resultLayer; } catch (_) {}
 
@@ -1279,7 +1506,7 @@ function makeImportCaptureScript({
       index: settings.index,
       total: settings.total,
       name: expected,
-      grouped: grouped,
+      grouped: false,
       layerId: layerId(resultLayer)
     });
   } catch (error) {
@@ -1291,61 +1518,151 @@ function makeImportCaptureScript({
 }());`;
 }
 
-// Positions come from the data file: match each element's layer by name, then
-// translate so the layer's top-left equals the stored bounding-box origin.
-function makePositionByNameScript({ requestId, groupName, placements }) {
-  const payload = JSON.stringify({ requestId, groupName, placements });
+// Photopea UnitValue host objects hang if .n / .as are read inside a script, and
+// in-script JSON.stringify+regex px() was returning 0. echoToOE can serialize the
+// raw UnitValue; panel JS parses .n. Measure and apply are therefore split.
+function unitValueToNumber(value) {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (value && typeof value === "object" && value.n != null) {
+    const n = Number(value.n);
+    return Number.isFinite(n) ? n : NaN;
+  }
+  const n = Number(value);
+  return Number.isFinite(n) ? n : NaN;
+}
+
+function makePositionMeasureScript({ requestId, index, total, name }) {
+  const payload = JSON.stringify({ requestId, index, total, name });
   return `
 (function () {
   var settings = ${payload};
-  ${commonHelpers()}
+  ${positionHelpers()}
   try {
+    send("probe", {
+      ok: true,
+      step: "position-measure-start",
+      index: settings.index,
+      name: settings.name
+    });
     if (!app.documents || app.documents.length === 0) {
       throw new Error("Open the document that holds the imported elements.");
     }
     var documentRef = app.activeDocument;
-    commitActiveTransform();
-    var group = resolveGroup(documentRef, -1, settings.groupName);
-    if (!group) {
-      group = documentRef.layerSets.add();
-      group.name = settings.groupName;
+    var target = findPlacedLayerByName(documentRef, settings.name);
+    if (!target) {
+      send("position-measure", {
+        ok: true,
+        index: settings.index,
+        name: settings.name,
+        found: false
+      });
+      return;
     }
-
-    var positioned = 0;
-    var missing = [];
-    var list = settings.placements || [];
-    for (var i = 0; i < list.length; i++) {
-      var item = list[i];
-      var target = findPlacedLayerByName(documentRef, item.name);
-      if (!target) {
-        missing.push(item.name);
-        continue;
-      }
-      try {
-        if (!isInsideGroup(target, group)) moveIntoGroup(target, group);
-      } catch (_) {}
-      try { target.visible = true; } catch (_) {}
-      try {
-        var bounds = target.bounds;
-        var dx = item.x - px(bounds[0]);
-        var dy = item.y - px(bounds[1]);
-        if (dx !== 0 || dy !== 0) target.translate(dx, dy);
-        positioned += 1;
-      } catch (_) {
-        missing.push(item.name);
-      }
-    }
-
-    send("position-done", {
+    try { target.visible = true; } catch (_) {}
+    // Do NOT set activeLayer — activating a placed Smart Object can open Free
+    // Transform and hang Photopea. Echo raw bounds; panel parses UnitValue.n.
+    var bounds = target.bounds;
+    send("position-measure", {
       ok: true,
-      positioned: positioned,
-      total: list.length,
-      missing: missing,
-      groupName: settings.groupName
+      index: settings.index,
+      name: settings.name,
+      found: true,
+      bounds: bounds ? [bounds[0], bounds[1], bounds[2], bounds[3]] : null
     });
   } catch (error) {
-    send("position-done", {
+    send("position-measure", {
       ok: false,
+      index: settings.index,
+      name: settings.name,
+      message: error && error.message ? error.message : String(error)
+    });
+  }
+}());`;
+}
+
+function makePositionApplyScript({
+  requestId,
+  index,
+  total,
+  name,
+  scaleX,
+  scaleY,
+  doResize,
+  dx,
+  dy,
+}) {
+  const payload = JSON.stringify({
+    requestId,
+    index,
+    total,
+    name,
+    scaleX,
+    scaleY,
+    doResize: !!doResize,
+    dx,
+    dy,
+  });
+  return `
+(function () {
+  var settings = ${payload};
+  ${positionHelpers()}
+  try {
+    send("probe", {
+      ok: true,
+      step: "position-apply-start",
+      index: settings.index,
+      name: settings.name
+    });
+    if (!app.documents || app.documents.length === 0) {
+      throw new Error("Open the document that holds the imported elements.");
+    }
+    var documentRef = app.activeDocument;
+    var target = findPlacedLayerByName(documentRef, settings.name);
+    if (!target) {
+      send("position-apply", {
+        ok: true,
+        index: settings.index,
+        name: settings.name,
+        found: false
+      });
+      return;
+    }
+    try { target.visible = true; } catch (_) {}
+
+    var resized = false;
+    if (settings.doResize) {
+      try {
+        target.resize(
+          Number(settings.scaleX),
+          Number(settings.scaleY),
+          AnchorPosition.TOPLEFT
+        );
+        resized = true;
+      } catch (_) {}
+    }
+
+    var dx = Number(settings.dx) || 0;
+    var dy = Number(settings.dy) || 0;
+    if (dx !== 0 || dy !== 0) target.translate(dx, dy);
+
+    // Echo raw after-bounds for panel logging only — no in-script px / corrective move.
+    var after = null;
+    try { after = target.bounds; } catch (_) {}
+    send("position-apply", {
+      ok: true,
+      index: settings.index,
+      name: settings.name,
+      found: true,
+      resized: resized,
+      dx: dx,
+      dy: dy,
+      afterBounds: after ? [after[0], after[1], after[2], after[3]] : null
+    });
+  } catch (error) {
+    send("position-apply", {
+      ok: false,
+      index: settings.index,
+      name: settings.name,
       message: error && error.message ? error.message : String(error)
     });
   }
@@ -1458,7 +1775,7 @@ function openFolderPicker(mode = "choose") {
     state.exportAfterFolderChoice = false;
     state.statusKind = "error";
     state.statusText =
-      "The folder window was blocked. Allow pop-ups for this plugin, or switch destination to ZIP.";
+      "The folder window was blocked. Allow pop-ups for this plugin, then choose a folder.";
     render();
     return;
   }
@@ -1545,6 +1862,13 @@ function decodePng(buffer, maxSide) {
 }
 
 function elementTitle(labelId) {
+  const comps = state.scan && state.scan.components;
+  if (comps && comps.length) {
+    const index = comps.findIndex((component) => component.id === labelId);
+    if (index >= 0) {
+      return `${state.prefix}_${padNumber(index + 1, 2)}`;
+    }
+  }
   return `${state.prefix}_${padNumber(labelId, 2)}`;
 }
 
@@ -1598,7 +1922,7 @@ function fitPreviewLayout(card, analysisW, analysisH) {
     dh,
     scaleX: analysisW / dw,
     scaleY: analysisH / dh,
-    outlineRadius: Math.max(1, Math.round(2.5 * dpr)),
+    outlineRadius: 1,
   };
 }
 
@@ -1611,47 +1935,49 @@ function drawIslandOutline(
   scaleY,
   dw,
   dh,
-  outlineRadius,
 ) {
   const imageData = ctx.getImageData(0, 0, dw, dh);
   const dst = imageData.data;
-  const radius = Math.max(1, outlineRadius | 0);
 
   const inIsland = (sx, sy) => {
     if (sx < 0 || sy < 0 || sx >= analysisW || sy >= analysisH) return false;
     return !!islandMask[sy * analysisW + sx];
   };
 
-  const isEdge = (sx, sy) => {
-    if (!inIsland(sx, sy)) return false;
-    for (let dy = -1; dy <= 1; dy++) {
-      for (let dx = -1; dx <= 1; dx++) {
-        if (!dx && !dy) continue;
-        if (!inIsland(sx + dx, sy + dy)) return true;
-      }
-    }
-    return false;
-  };
-
+  // Thin 1px canvas-space outline (no circular stamp — that looked blobbed
+  // when analysis pixels map to many preview pixels).
   for (let py = 0; py < dh; py++) {
-    const srcY = Math.min(analysisH - 1, Math.floor(py * scaleY));
     for (let pxCol = 0; pxCol < dw; pxCol++) {
       const srcX = Math.min(analysisW - 1, Math.floor(pxCol * scaleX));
-      if (!isEdge(srcX, srcY)) continue;
-      for (let oy = -radius; oy <= radius; oy++) {
-        const yy = py + oy;
-        if (yy < 0 || yy >= dh) continue;
-        for (let ox = -radius; ox <= radius; ox++) {
-          if (ox * ox + oy * oy > radius * radius) continue;
-          const xx = pxCol + ox;
-          if (xx < 0 || xx >= dw) continue;
-          const dstOffset = (yy * dw + xx) << 2;
-          dst[dstOffset] = 255;
-          dst[dstOffset + 1] = 255;
-          dst[dstOffset + 2] = 255;
-          dst[dstOffset + 3] = 255;
+      const srcY = Math.min(analysisH - 1, Math.floor(py * scaleY));
+      if (!inIsland(srcX, srcY)) continue;
+      const neighbors = [
+        [pxCol + 1, py],
+        [pxCol - 1, py],
+        [pxCol, py + 1],
+        [pxCol, py - 1],
+      ];
+      let edge = false;
+      for (let n = 0; n < neighbors.length; n++) {
+        const nx = neighbors[n][0];
+        const ny = neighbors[n][1];
+        if (nx < 0 || ny < 0 || nx >= dw || ny >= dh) {
+          edge = true;
+          break;
+        }
+        const nSrcX = Math.min(analysisW - 1, Math.floor(nx * scaleX));
+        const nSrcY = Math.min(analysisH - 1, Math.floor(ny * scaleY));
+        if (!inIsland(nSrcX, nSrcY)) {
+          edge = true;
+          break;
         }
       }
+      if (!edge) continue;
+      const dstOffset = (py * dw + pxCol) << 2;
+      dst[dstOffset] = 255;
+      dst[dstOffset + 1] = 255;
+      dst[dstOffset + 2] = 255;
+      dst[dstOffset + 3] = 255;
     }
   }
   ctx.putImageData(imageData, 0, 0);
@@ -1708,11 +2034,7 @@ function drawPreview(scan) {
 
   ctx.putImageData(out, 0, 0);
 
-  if (
-    state.editTool === "fill" &&
-    state.previewHover &&
-    state.previewHover.islandMask
-  ) {
+  if (state.previewHover && state.previewHover.islandMask) {
     drawIslandOutline(
       ctx,
       state.previewHover.islandMask,
@@ -1722,7 +2044,6 @@ function drawPreview(scan) {
       layout.scaleY,
       layout.dw,
       layout.dh,
-      layout.outlineRadius,
     );
   }
 
@@ -1753,12 +2074,12 @@ function updatePreviewChrome() {
       dirty.remove();
     }
   }
-  const updateBtn = document.querySelector('[data-preview-action="update"]');
+  const updateBtn = document.querySelector('[data-preview-action="save-data"]');
   if (updateBtn) {
     updateBtn.disabled = !(
       state.scan &&
-      state.scan.labelsEdited &&
-      !state.scan.labelsCommitted
+      state.scan.components &&
+      state.scan.components.length
     );
   }
   document.querySelectorAll("[data-preview-action]").forEach((button) => {
@@ -1821,17 +2142,15 @@ function handlePreviewMouseMove(event) {
     islandMask: null,
   };
 
-  if (state.editTool === "fill") {
-    const island = CORE.floodIsland(
-      scan.labels,
-      scan.analysisWidth,
-      scan.analysisHeight,
-      coords.x,
-      coords.y,
-      state.eightConnected,
-    );
-    hover.islandMask = island.mask;
-  }
+  const island = CORE.floodIsland(
+    scan.labels,
+    scan.analysisWidth,
+    scan.analysisHeight,
+    coords.x,
+    coords.y,
+    state.eightConnected,
+  );
+  hover.islandMask = island.mask;
 
   state.previewHover = hover;
   drawPreview(scan);
@@ -1866,7 +2185,13 @@ function handlePreviewClick(event) {
   if (!coords) return;
   const index = coords.y * scan.analysisWidth + coords.x;
   const label = scan.labels[index];
-  if (!label) return;
+
+  if (!label) {
+    // Empty space clears the sample swatch (replaces the old New button).
+    state.sampledLabel = null;
+    updatePreviewChrome();
+    return;
+  }
 
   if (state.editTool === "sample") {
     state.sampledLabel = label;
@@ -1894,9 +2219,16 @@ function handlePreviewClick(event) {
       const fresh = CORE.createRandomPalette([target]);
       scan.labelColors.set(target, fresh.get(target));
     }
+    scan.components = CORE.buildComponentsFromLabels(
+      scan.labels,
+      scan.analysisWidth,
+      scan.analysisHeight,
+      Number(state.minSize) || 1,
+    );
     scan.labelsEdited = true;
     scan.labelsCommitted = false;
-    scan.exportLabels = null;
+    // Keep exportLabels as the full-res opaque silhouette so Save can
+    // propagate analysis edits without nearest-neighbour upscale aliasing.
     scan.exportImageData = null;
     updatePreviewChrome();
     drawPreview(scan);
@@ -1911,65 +2243,289 @@ function randomizePreviewColors() {
   updatePreviewChrome();
 }
 
-function commitPreviewEdits() {
-  if (!state.scan || !state.scan.labelsEdited) return;
+function reassignElementsAction() {
+  if (!state.scan || state.scan.schematic || !state.scan.imageData) return;
+  if (state.statusKind === "working") return;
+  readInputs();
   const settings = settingsFromState();
-  const components = CORE.buildComponentsFromLabels(
-    state.scan.labels,
-    state.scan.analysisWidth,
-    state.scan.analysisHeight,
+  const labeled = CORE.labelComponents(
+    state.scan.imageData,
+    settings.alphaThreshold,
+    settings.minSize,
+    settings.eightConnected,
+  );
+  state.scan.labels = labeled.labels;
+  state.scan.components = labeled.components;
+  state.scan.labelColors = CORE.createRandomPalette(
+    labeled.components.map((component) => component.id),
+  );
+  state.scan.labelsEdited = true;
+  state.scan.labelsCommitted = false;
+  // Keep exportLabels as opaque guide for full-res Save/Export propagate.
+  state.scan.exportImageData = null;
+  state.scan.settings = settings;
+  state.sampledLabel = null;
+  clearPreviewHover();
+  state.statusKind = labeled.components.length ? "ok" : "error";
+  state.statusText = labeled.components.length
+    ? `Reassigned ${labeled.components.length} element${
+        labeled.components.length === 1 ? "" : "s"
+      } from alpha (preview resolution).`
+    : "No elements matched your thresholds after reassign.";
+  updatePreviewChrome();
+  drawPreview(state.scan);
+  const status = document.querySelector(".status span");
+  if (status) status.textContent = state.statusText;
+  const statusEl = document.querySelector(".status");
+  if (statusEl) {
+    statusEl.className = `status status-${state.statusKind}`;
+  }
+}
+
+function snapshotOpaqueFromLabels(labels, width, height) {
+  if (!labels || labels.length !== width * height) return null;
+  const opaque = new Uint8Array(width * height);
+  for (let i = 0; i < opaque.length; i++) {
+    opaque[i] = labels[i] ? 1 : 0;
+  }
+  return opaque;
+}
+
+function downscaleLabelsNearest(fullLabels, fullW, fullH, analysisW, analysisH) {
+  const out = new Int32Array(analysisW * analysisH);
+  for (let y = 0; y < analysisH; y++) {
+    const srcY = Math.min(fullH - 1, Math.floor((y * fullH) / analysisH));
+    for (let x = 0; x < analysisW; x++) {
+      const srcX = Math.min(fullW - 1, Math.floor((x * fullW) / analysisW));
+      out[y * analysisW + x] = fullLabels[srcY * fullW + srcX];
+    }
+  }
+  return out;
+}
+
+function resolveFullResLabelsForSave(scan, settings, opaqueGuide) {
+  // Prefer an untouched full-res mask when edits have not invalidated it.
+  if (scan.exportLabels && !scan.labelsEdited) {
+    return scan.exportLabels;
+  }
+  if (
+    !scan.labels ||
+    !scan.width ||
+    !scan.height ||
+    !scan.analysisWidth ||
+    !scan.analysisHeight
+  ) {
+    return null;
+  }
+  if (
+    scan.analysisScale >= 0.999 ||
+    (scan.analysisWidth === scan.width && scan.analysisHeight === scan.height)
+  ) {
+    return scan.labels;
+  }
+
+  const aw = scan.analysisWidth;
+  const ah = scan.analysisHeight;
+  const fw = scan.width;
+  const fh = scan.height;
+  let opaque = opaqueGuide || null;
+
+  // Prefer the previous full-res label silhouette (keeps true alpha edges).
+  // IMPORTANT: snapshot this BEFORE compacting — compact used to zero merged-away
+  // ids in exportLabels, which punched holes and made filled elements vanish.
+  if (!opaque && scan.exportLabels && scan.exportLabels.length === fw * fh) {
+    opaque = snapshotOpaqueFromLabels(scan.exportLabels, fw, fh);
+  } else if (!opaque && scan.exportImageData && scan.exportImageData.width === fw) {
+    opaque = CORE.buildOpaqueMaskFromImageData(
+      scan.exportImageData,
+      (settings && settings.alphaThreshold) || state.alphaThreshold || 8,
+    );
+  } else if (!opaque && scan.imageData && scan.imageData.width === fw) {
+    opaque = CORE.buildOpaqueMaskFromImageData(
+      scan.imageData,
+      (settings && settings.alphaThreshold) || state.alphaThreshold || 8,
+    );
+  }
+
+  if (opaque) {
+    return CORE.propagateLabelsToFullRes(
+      scan.labels,
+      aw,
+      ah,
+      fw,
+      fh,
+      opaque,
+    );
+  }
+
+  // Last resort (no full-res silhouette): nearest-neighbour — expect aliasing.
+  const fullLabels = new Int32Array(fw * fh);
+  for (let y = 0; y < fh; y++) {
+    const sy = Math.min(ah - 1, Math.floor((y * ah) / fh));
+    for (let x = 0; x < fw; x++) {
+      const sx = Math.min(aw - 1, Math.floor((x * aw) / fw));
+      fullLabels[y * fw + x] = scan.labels[sy * aw + sx];
+    }
+  }
+  return fullLabels;
+}
+
+function compactScanLabelIds(scan, minSize) {
+  if (!scan || !scan.labels) return;
+  const result = CORE.compactLabelIds(
+    scan.labels,
+    scan.analysisWidth,
+    scan.analysisHeight,
+    minSize || 1,
+    scan.labelColors,
+  );
+  scan.components = result.components;
+  scan.labelColors = result.labelColors;
+  // Do NOT remap/zero exportLabels here. Merged-away ids must stay non-zero in
+  // the silhouette until propagate rewrites the full-res mask from analysis.
+  if (typeof state.sampledLabel === "number" && result.remap.has(state.sampledLabel)) {
+    state.sampledLabel = result.remap.get(state.sampledLabel);
+  } else if (typeof state.sampledLabel === "number") {
+    state.sampledLabel = null;
+  }
+}
+
+function syncPreviewFromFullLabels(scan, fullLabels, minSize) {
+  if (!scan || !fullLabels) return;
+  scan.exportLabels = fullLabels;
+  const aw = scan.analysisWidth;
+  const ah = scan.analysisHeight;
+  if (aw === scan.width && ah === scan.height) {
+    scan.labels = fullLabels;
+  } else {
+    scan.labels = downscaleLabelsNearest(
+      fullLabels,
+      scan.width,
+      scan.height,
+      aw,
+      ah,
+    );
+  }
+  scan.components = CORE.buildComponentsFromLabels(
+    scan.labels,
+    aw,
+    ah,
+    minSize || 1,
+  );
+  scan.imageData = CORE.imageDataFromLabels(scan.labels, aw, ah);
+  scan.labelsEdited = false;
+  scan.labelsCommitted = true;
+}
+
+async function saveSplitDataAction() {
+  if (!state.scan || state.scan.schematic) return;
+  if (state.statusKind === "working") return;
+
+  readInputs();
+  const settings = settingsFromState();
+
+
+  // Snapshot the full-res silhouette BEFORE compacting analysis ids. Compact used
+  // to zero merged-away ids in exportLabels, which deleted those regions on Save.
+  const opaqueGuide = snapshotOpaqueFromLabels(
+    state.scan.exportLabels,
+    state.scan.width,
+    state.scan.height,
+  );
+  const previewCountBefore = state.scan.components
+    ? state.scan.components.length
+    : 0;
+
+  compactScanLabelIds(state.scan, settings.minSize);
+  if (state.scan.labelsEdited) {
+    state.scan.labelsCommitted = true;
+    state.scan.exportImageData = null;
+  }
+
+  if (!state.scan.components.length) {
+    state.statusKind = "error";
+    state.statusText =
+      state.scan.labelsEdited
+        ? "No elements left after edits. Adjust fills or run Generate ID Mask again."
+        : "Generate or Restore an ID Mask before saving data.";
+    updatePreviewChrome();
+    render();
+    return;
+  }
+
+  if (state.folderPermission !== "granted" || !state.folderHandle) {
+    state.afterFolderChoice = "save-data";
+    state.statusKind = "idle";
+    state.statusText = "Choose an export folder, then Save data again.";
+    render();
+    openFolderPicker(state.folderName ? "change" : "choose");
+    return;
+  }
+
+  const fullLabels = resolveFullResLabelsForSave(
+    state.scan,
+    settings,
+    opaqueGuide,
+  );
+  if (!fullLabels) {
+    state.statusKind = "error";
+    state.statusText = "Could not build a full-resolution ID mask to save.";
+    render();
+    return;
+  }
+  // Full-res boxes for JSON / Position (avoids scaled preview-box error).
+  const fullComponents = CORE.buildComponentsFromLabels(
+    fullLabels,
+    state.scan.width,
+    state.scan.height,
     settings.minSize,
   );
-  state.scan.components = components;
-  state.scan.labelsCommitted = true;
-  state.scan.exportLabels = null;
-  state.scan.exportImageData = null;
-  state.statusKind = components.length ? "ok" : "error";
-  state.statusText = components.length
-    ? `Updated: ${components.length} element${components.length === 1 ? "" : "s"} ready to export.`
-    : "No elements left after Update. Adjust fills or run Generate ID Mask again.";
-  updatePreviewChrome();
-  const statusSpan = document.querySelector(".status span");
-  if (statusSpan) statusSpan.textContent = state.statusText;
-  const statusBox = document.querySelector(".status");
-  if (statusBox) {
-    statusBox.className = `status status-${state.statusKind}`;
+  if (!fullComponents.length) {
+    state.statusKind = "error";
+    state.statusText =
+      "No elements left after edits. Adjust fills or run Generate ID Mask again.";
+    render();
+    return;
   }
-  const exportBtn = document.querySelector('[data-run="export"]');
-  if (exportBtn) exportBtn.disabled = !components.length;
+  const data = DATA.buildSplitData({
+    settings,
+    components: fullComponents,
+    meta: state.scan.meta || {},
+    width: state.scan.width,
+    height: state.scan.height,
+    pluginVersion: META.version,
+    exported: false,
+    labelColors: state.scan.labelColors,
+  });
+  state.latestSplitData = data;
+  syncPreviewFromFullLabels(state.scan, fullLabels, settings.minSize);
 
-  if (components.length && state.embedded) {
-    // Persist full-document bboxes so Restore ID Mask can rematch them later.
-    const aw = state.scan.analysisWidth || 1;
-    const ah = state.scan.analysisHeight || 1;
-    const fw = state.scan.width || aw;
-    const fh = state.scan.height || ah;
-    const fullComponents = components.map((component) => ({
-      ...component,
-      minX: Math.floor((component.minX * fw) / aw),
-      minY: Math.floor((component.minY * fh) / ah),
-      maxX: Math.max(
-        Math.floor((component.minX * fw) / aw),
-        Math.ceil(((component.maxX + 1) * fw) / aw) - 1,
-      ),
-      maxY: Math.max(
-        Math.floor((component.minY * fh) / ah),
-        Math.ceil(((component.maxY + 1) * fh) / ah) - 1,
-      ),
-    }));
-    const data = DATA.buildSplitData({
-      settings,
-      components: fullComponents,
-      meta: state.scan.meta || {},
-      width: state.scan.width,
-      height: state.scan.height,
-      pluginVersion: META.version,
-      exported: false,
-    });
-    state.latestSplitData = data;
-    upsertDataLayer(data).catch(() => {
-      // Best-effort persistence.
-    });
+  setWorking(
+    "saving data",
+    `Saving ${DATA.DATA_FILENAME} + ${DATA.ID_MASK_FILENAME}…`,
+    createRequestId(),
+    "save-data",
+    60000,
+  );
+  render();
+
+  try {
+    await writeFolderSplitData(data);
+    await writeIdMaskFile(fullLabels, state.scan.width, state.scan.height, null);
+    clearActiveRequest();
+    state.stage = "complete";
+    state.statusKind = "ok";
+    state.statusText = `Saved ${data.elements.length} element${data.elements.length === 1 ? "" : "s"} to “${state.folderName}/${DATA.DATA_FILENAME}” + ${DATA.ID_MASK_FILENAME}.`;
+    render();
+  } catch (error) {
+    clearActiveRequest();
+    state.stage = "error";
+    state.statusKind = "error";
+    state.statusText =
+      error && error.message
+        ? `Could not write data files: ${error.message}`
+        : `Could not write ${DATA.DATA_FILENAME} / ${DATA.ID_MASK_FILENAME}.`;
+    render();
   }
 }
 
@@ -2098,7 +2654,7 @@ function buildSchematicScan(data) {
     imageData,
     labels: painted.labels,
     components,
-    labelColors: CORE.createDefaultPalette(labelIds),
+    labelColors: paletteFromData(data, labelIds),
     labelsEdited: false,
     labelsCommitted: true,
     exportLabels: null,
@@ -2117,11 +2673,12 @@ function buildSchematicScan(data) {
   };
 }
 
-function applyLoadedSplitData(data, sourceLabel) {
+async function applyLoadedSplitData(data, sourceLabel) {
   const validation = DATA.validateSplitData(data);
   if (!validation.ok) {
     state.statusKind = "error";
     state.statusText = validation.message;
+    state.bootHint = "Data file invalid.";
     return false;
   }
   applyRestoredSettings(data, sourceLabel);
@@ -2129,12 +2686,38 @@ function applyLoadedSplitData(data, sourceLabel) {
   if (sourceLabel === "folder" || sourceLabel === "file") {
     state.folderData = data;
   }
-  state.scan = buildSchematicScan(data);
+  state.dataFileName = DATA.DATA_FILENAME;
+  state.dataFileSource = sourceLabel;
   state.sampledLabel = null;
   state.editTool = "sample";
   clearPreviewHover();
+
+  const n = data.elements.length;
+  const folderLabel = state.folderName ? `“${state.folderName}”` : "folder";
+  state.bootHint = `Found ${DATA.DATA_FILENAME} (${n} elements). Restoring ID mask…`;
   state.statusKind = "ok";
-  state.statusText = `Loaded ${data.elements.length} element${data.elements.length === 1 ? "" : "s"} from ${sourceLabel}. Click Restore ID Mask (uses saved mask file when available).`;
+  state.statusText = `Loaded ${n} element${n === 1 ? "" : "s"} from ${sourceLabel}. Restoring ID mask…`;
+  render();
+
+  // Prefer the exported mask file so the panel shows real shapes, not boxes.
+  if (state.folderHandle && state.folderPermission === "granted") {
+    try {
+      const ok = await restoreIdMaskFromFolder();
+      if (ok) {
+        state.bootHint = `Loaded ${DATA.DATA_FILENAME} + ${DATA.ID_MASK_FILENAME} from ${folderLabel}.`;
+        state.statusKind = "ok";
+        state.statusText = `Restored ${state.scan.components.length} element${state.scan.components.length === 1 ? "" : "s"} from the export folder.`;
+        return true;
+      }
+    } catch (_) {
+      // Fall through to schematic layout.
+    }
+  }
+
+  state.scan = buildSchematicScan(data);
+  state.bootHint = `Loaded ${DATA.DATA_FILENAME}; ${DATA.ID_MASK_FILENAME} not found — schematic boxes only.`;
+  state.statusKind = "ok";
+  state.statusText = `Loaded ${n} element${n === 1 ? "" : "s"} from ${sourceLabel}. Export again if the ID mask file is missing.`;
   return true;
 }
 
@@ -2143,7 +2726,7 @@ function makeReadActiveTextLayerScript(requestId) {
   return `
 (function () {
   var settings = ${payload};
-  ${commonHelpers()}
+  ${dataLayerHelpers()}
   try {
     if (!app.documents || app.documents.length === 0) {
       throw new Error("Open a document first.");
@@ -2200,15 +2783,7 @@ async function loadDataLayerFromSelection() {
 
 async function loadDataFileFromFolderOrPicker() {
   if (state.statusKind === "working") return;
-
-  if (state.folderHandle && state.folderPermission === "granted") {
-    const data = await readFolderSplitData();
-    if (data && applyLoadedSplitData(data, "folder")) {
-      render();
-      return;
-    }
-  }
-
+  // Always open a file picker — folder auto-load happens on panel open / folder grant.
   openJsonFilePicker();
 }
 
@@ -2261,6 +2836,8 @@ async function writeFolderSplitData(data) {
   const bytes = new TextEncoder().encode(text);
   await writeFileToDirectory(DATA.DATA_FILENAME, bytes);
   state.folderData = data;
+  state.dataFileName = DATA.DATA_FILENAME;
+  if (state.folderName) state.dataFileSource = "folder";
 }
 
 async function readFolderIdMaskBytes() {
@@ -2276,6 +2853,17 @@ async function readFolderIdMaskBytes() {
   } catch {
     return null;
   }
+}
+
+function paletteFromData(data, labelIds) {
+  const stored = DATA.parseLabelColors(data && data.labelColors);
+  const fallback = CORE.createDefaultPalette(labelIds);
+  const colors = new Map();
+  for (let i = 0; i < labelIds.length; i++) {
+    const id = labelIds[i];
+    colors.set(id, stored.get(id) || fallback.get(id));
+  }
+  return colors;
 }
 
 function buildScanFromIdMaskLabels(labels, width, height, data) {
@@ -2329,7 +2917,7 @@ function buildScanFromIdMaskLabels(labels, width, height, data) {
             minSize,
           )
         : components,
-    labelColors: CORE.createDefaultPalette(labelIds),
+    labelColors: paletteFromData(data, labelIds),
     labelsEdited: false,
     labelsCommitted: true,
     exportLabels: labels,
@@ -2592,18 +3180,20 @@ async function beginImportElements() {
   }
 }
 
-function completePositionJob(payload) {
+function completePositionJob() {
+  const job = state._positionJob;
   const groupName =
-    payload.groupName || state._positionGroupName || "elements";
-  const positioned = Number(payload.positioned) || 0;
-  const total = Number(payload.total) || positioned;
-  const missing = Array.isArray(payload.missing) ? payload.missing : [];
+    (job && job.groupName) || state._positionGroupName || "elements";
+  const positioned = job ? job.positioned : 0;
+  const total = job ? job.placements.length : positioned;
+  const missing = job && Array.isArray(job.missing) ? job.missing.slice() : [];
+  state._positionJob = null;
   clearActiveRequest();
   state.stage = "complete";
 
   if (!missing.length) {
     state.statusKind = "ok";
-    state.statusText = `Positioned ${positioned} element${positioned === 1 ? "" : "s"} in “${groupName}” from stored boxes.`;
+    state.statusText = `Positioned ${positioned} element${positioned === 1 ? "" : "s"} from stored boxes.`;
     render();
     return;
   }
@@ -2613,6 +3203,127 @@ function completePositionJob(payload) {
   state.statusKind = "error";
   state.statusText = `Positioned ${positioned} of ${total}. Missing layers: ${preview}${rest}. Run Import Elements first.`;
   render();
+}
+
+function positionNextElement(requestId) {
+  const job = state._positionJob;
+  if (!job || state.activeRequestId !== requestId) return;
+
+  if (job.index >= job.placements.length) {
+    completePositionJob();
+    return;
+  }
+
+  const item = job.placements[job.index];
+  // Per-element timeout — a hung translate must not block for the full job budget.
+  const timeoutMs = IMPORT_STEP_TIMEOUT_MS;
+  setWorking(
+    "positioning",
+    `Positioning ${job.index + 1}/${job.placements.length}: ${item.name}…`,
+    requestId,
+    "position",
+    timeoutMs,
+  );
+  render();
+
+
+  try {
+    postScript(
+      makePositionMeasureScript({
+        requestId,
+        index: job.index,
+        total: job.placements.length,
+        name: item.name,
+      }),
+    );
+  } catch (error) {
+    failActiveRequest(error && error.message ? error.message : String(error));
+  }
+}
+
+function applyPositionElement(requestId, measurePayload) {
+  const job = state._positionJob;
+  if (!job || state.activeRequestId !== requestId) return;
+
+  const item = job.placements[job.index];
+  if (!item || item.name !== measurePayload.name) {
+    failActiveRequest("Position lost track of the element list.");
+    return;
+  }
+
+  const bounds = measurePayload.bounds;
+  if (!bounds || bounds.length < 4) {
+    failActiveRequest(
+      `Could not read bounds for “${item.name}”. Try Import Elements again.`,
+    );
+    return;
+  }
+
+  const beforeL = unitValueToNumber(bounds[0]);
+  const beforeT = unitValueToNumber(bounds[1]);
+  const beforeR = unitValueToNumber(bounds[2]);
+  const beforeB = unitValueToNumber(bounds[3]);
+  const beforeW = beforeR - beforeL;
+  const beforeH = beforeB - beforeT;
+  const expectW = Number(item.width) || 0;
+  const expectH = Number(item.height) || 0;
+  const targetX = Number(item.x) || 0;
+  const targetY = Number(item.y) || 0;
+
+
+  if (!(beforeW > 0 && beforeH > 0) || !Number.isFinite(beforeL) || !Number.isFinite(beforeT)) {
+    failActiveRequest(
+      `Could not read bounds for “${item.name}” (got ${beforeW}×${beforeH} at ${beforeL},${beforeT}).`,
+    );
+    return;
+  }
+
+  let scaleX = 100;
+  let scaleY = 100;
+  let doResize = false;
+  // Photopea Smart Object bounds often differ from the exported crop by 1–2px.
+  // A 0.5% threshold skipped those; resize whenever any pixel side differs.
+  if (expectW > 0 && expectH > 0 && beforeW > 0 && beforeH > 0) {
+    scaleX = (expectW / beforeW) * 100;
+    scaleY = (expectH / beforeH) * 100;
+    if (
+      Math.abs(expectW - beforeW) >= 1 ||
+      Math.abs(expectH - beforeH) >= 1
+    ) {
+      doResize = true;
+    }
+  }
+
+  // TOPLEFT resize keeps the measured top-left; translate from that origin.
+  const dx = targetX - beforeL;
+  const dy = targetY - beforeT;
+
+  setWorking(
+    "positioning",
+    `Positioning ${job.index + 1}/${job.placements.length}: ${item.name}…`,
+    requestId,
+    "position",
+    IMPORT_STEP_TIMEOUT_MS,
+  );
+
+
+  try {
+    postScript(
+      makePositionApplyScript({
+        requestId,
+        index: job.index,
+        total: job.placements.length,
+        name: item.name,
+        scaleX,
+        scaleY,
+        doResize,
+        dx,
+        dy,
+      }),
+    );
+  } catch (error) {
+    failActiveRequest(error && error.message ? error.message : String(error));
+  }
 }
 
 async function beginPositionElements() {
@@ -2631,29 +3342,41 @@ async function beginPositionElements() {
     name: elementLayerName(element.filename),
     x: Number(element.x) || 0,
     y: Number(element.y) || 0,
+    width: Number(element.width) || 0,
+    height: Number(element.height) || 0,
   }));
+  if (!placements.length) {
+    state.statusKind = "error";
+    state.statusText = "No elements in the data file to position.";
+    render();
+    return;
+  }
   const groupName = elementGroupName(data);
   const requestId = createRequestId();
-  const timeoutMs = Math.min(
-    1200000,
-    Math.max(META.requestTimeoutMs || 180000, 60000 + placements.length * 2000),
-  );
+  const timeoutMs = META.requestTimeoutMs || 180000;
 
   state._positionGroupName = groupName;
+  state._positionJob = {
+    placements,
+    index: 0,
+    positioned: 0,
+    missing: [],
+    groupName,
+  };
+
+  // Must arm activeRequestId before positionNextElement's guard, or the job
+  // returns immediately and nothing happens (seen in debug logs).
   setWorking(
     "positioning",
-    `Positioning ${placements.length} element${placements.length === 1 ? "" : "s"} from stored boxes…`,
+    `Positioning 1/${placements.length}: ${placements[0].name}…`,
     requestId,
     "position",
     timeoutMs,
   );
   render();
 
-  try {
-    postScript(makePositionByNameScript({ requestId, groupName, placements }));
-  } catch (error) {
-    failActiveRequest(error && error.message ? error.message : String(error));
-  }
+
+  positionNextElement(requestId);
 }
 
 function observePreviewResize() {
@@ -2827,6 +3550,12 @@ async function finishScanAnalysis(requestId, pngBuffer, meta) {
       state.statusText = `ID Mask ready: ${components.length} separate element${components.length === 1 ? "" : "s"} detected.${scaleNote}`;
     }
     render();
+
+    // Fresh Generate: persist JSON + ID mask immediately so Import/Position
+    // can run without a separate Save click. Restore leaves existing files alone.
+    if (!restoreMode && components.length) {
+      await saveSplitDataAction();
+    }
   } catch (error) {
     failActiveRequest(error && error.message ? error.message : String(error));
   }
@@ -2839,24 +3568,15 @@ async function ensureFullResolutionScan(requestId, settings) {
   // Restored from alpha-split-id-mask.png: labels are already full-res.
   if (scan.fromIdMask) {
     let fullLabels = scan.exportLabels;
-    if (scan.labelsEdited && scan.labelsCommitted && scan.analysisScale < 0.999) {
-      // Upscale edited analysis labels; no artwork opaque mask is available yet.
-      fullLabels = new Int32Array(scan.width * scan.height);
-      const aw = scan.analysisWidth;
-      const ah = scan.analysisHeight;
-      const scaleX = scan.width / aw;
-      const scaleY = scan.height / ah;
-      for (let y = 0; y < scan.height; y++) {
-        const sy = Math.min(ah - 1, Math.floor(y / scaleY));
-        for (let x = 0; x < scan.width; x++) {
-          const sx = Math.min(aw - 1, Math.floor(x / scaleX));
-          fullLabels[y * scan.width + x] = scan.labels[sy * aw + sx];
-        }
-      }
-      scan.exportLabels = fullLabels;
-    } else if (scan.labelsEdited && scan.labelsCommitted && scan.analysisScale >= 0.999) {
-      fullLabels = scan.labels;
-      scan.exportLabels = fullLabels;
+    if (scan.labelsEdited && scan.labelsCommitted) {
+      const opaqueGuide = snapshotOpaqueFromLabels(
+        scan.exportLabels,
+        scan.width,
+        scan.height,
+      );
+      compactScanLabelIds(scan, settings.minSize);
+      fullLabels = resolveFullResLabelsForSave(scan, settings, opaqueGuide);
+      syncPreviewFromFullLabels(scan, fullLabels, settings.minSize);
     }
 
     if (!fullLabels) {
@@ -3029,7 +3749,7 @@ function beginScan(mode = "generate") {
     if (!validation.ok || !data.elements.length) {
       state.statusKind = "error";
       state.statusText =
-        "Load Alpha Split data first (data layer or JSON file), then Restore ID Mask.";
+        "Load Alpha Split data first (folder JSON), then Restore ID Mask.";
       render();
       return;
     }
@@ -3087,6 +3807,8 @@ function beginScanCapture(mode = "generate") {
     docHint && docHint.width && docHint.height
       ? ` ${docHint.width}×${docHint.height}`
       : "";
+  // Generate uses the workfile-safe PSD snapshot path (pre-1.3.8 working behaviour).
+  // Restore falls back to light PNG capture when no saved ID mask file is present.
   setWorking(
     restoreMode ? "exporting the layer" : "receiving snapshot",
     restoreMode
@@ -3096,6 +3818,7 @@ function beginScanCapture(mode = "generate") {
     "scan",
   );
   render();
+
 
   try {
     postScript(
@@ -3130,7 +3853,7 @@ async function beginExport() {
   if (state.scan.labelsEdited && !state.scan.labelsCommitted) {
     state.statusKind = "error";
     state.statusText =
-      "Click Update to apply preview edits before exporting.";
+      "Click Save data to apply preview edits before exporting.";
     render();
     return;
   }
@@ -3255,11 +3978,10 @@ async function continueExportWithArtwork(requestId, pngBuffer) {
 
 async function writeExportOutputs(scan, requestId, settings, timeoutMs) {
   if (!scan.components.length) {
-    failActiveRequest("No elements to export after Update.");
+    failActiveRequest("No elements to export after Save data.");
     return;
   }
 
-  const zipEntries = [];
   const written = [];
 
   for (let index = 0; index < scan.components.length; index++) {
@@ -3282,13 +4004,7 @@ async function writeExportOutputs(scan, requestId, settings, timeoutMs) {
       component,
     );
     const bytes = await imageDataToPngBytes(crop.imageData);
-
-    if (state.destination === "folder") {
-      written.push(await writeFileToDirectory(filename, bytes));
-    } else {
-      zipEntries.push({ name: filename, data: bytes });
-      written.push(filename);
-    }
+    written.push(await writeFileToDirectory(filename, bytes));
     await yieldToUi();
   }
 
@@ -3303,13 +4019,7 @@ async function writeExportOutputs(scan, requestId, settings, timeoutMs) {
   );
   render();
 
-  const maskLabels = scan.labels;
-  await writeIdMaskFile(
-    maskLabels,
-    scan.width,
-    scan.height,
-    state.destination === "zip" ? zipEntries : null,
-  );
+  await writeIdMaskFile(scan.labels, scan.width, scan.height, null);
 
   const splitData = DATA.buildSplitData({
     settings,
@@ -3319,30 +4029,15 @@ async function writeExportOutputs(scan, requestId, settings, timeoutMs) {
     height: scan.height,
     pluginVersion: META.version,
     exported: true,
+    labelColors: scan.labelColors || state.scan.labelColors,
   });
   state.latestSplitData = splitData;
-
-  if (state.destination === "zip") {
-    const jsonBytes = new TextEncoder().encode(
-      JSON.stringify(splitData, null, 2),
-    );
-    zipEntries.push({ name: DATA.DATA_FILENAME, data: jsonBytes });
-    const zipBlob = ZIP.createStoredZip(zipEntries);
-    const zipName = `${settings.prefix}_elements.zip`;
-    downloadBlob(zipBlob, zipName);
-  } else {
-    await writeFolderSplitData(splitData);
-  }
-
-  await upsertDataLayer(splitData);
+  await writeFolderSplitData(splitData);
 
   clearActiveRequest();
   state.stage = "complete";
   state.statusKind = "ok";
-  state.statusText =
-    state.destination === "zip"
-      ? `Downloaded ${written.length} PNG${written.length === 1 ? "" : "s"}, ID mask, and data JSON as ${settings.prefix}_elements.zip.`
-      : `Exported ${written.length} PNG${written.length === 1 ? "" : "s"}, ${DATA.ID_MASK_FILENAME}, and ${DATA.DATA_FILENAME} to “${state.folderName}”.`;
+  state.statusText = `Exported ${written.length} PNG${written.length === 1 ? "" : "s"}, ${DATA.ID_MASK_FILENAME}, and ${DATA.DATA_FILENAME} to “${state.folderName}”.`;
   render();
 }
 
@@ -3539,6 +4234,8 @@ function handleDone() {
 
   if (state.stage === "receiving snapshot") {
     // Capture script sends: meta echo → PSD ArrayBuffer → "done" (order can vary slightly).
+    // Do not fail-fast: Photopea can emit a stray "done" before echoes/binary.
+    // Wait for meta+binary (or the request timeout).
     if (!state.pendingBinary || !state._scanMeta) {
       state.pendingDone = true;
       return;
@@ -3548,7 +4245,7 @@ function handleDone() {
   }
 
   if (state.stage === "exporting the layer") {
-    // Light restore: the PNG comes straight from the workfile, so analyse it now.
+    // Light capture: PNG from the workfile, then analyse.
     if (!state.pendingBinary || !state._scanMeta) {
       state.pendingDone = true;
       return;
@@ -3577,10 +4274,15 @@ function handleDone() {
 function handleTaggedMessage(payload) {
   if (!payload) return;
 
+
   // Data-layer replies carry their own token and can arrive while idle.
   if (payload.type === "data-layer") {
     const wait = state.dataLayerWaits.get(payload.requestId);
     if (wait) wait.settle(payload);
+    return;
+  }
+
+  if (payload.type === "probe") {
     return;
   }
 
@@ -3682,12 +4384,59 @@ function handleTaggedMessage(payload) {
     return;
   }
 
+  if (payload.type === "position-measure") {
+    const job = state._positionJob;
+    if (!job || state.activeRequestId !== payload.requestId) return;
+    if (!payload.ok) {
+      failActiveRequest(payload.message || "Could not measure element bounds.");
+      return;
+    }
+    if (!payload.found) {
+      if (payload.name) job.missing.push(payload.name);
+      job.index = Number(payload.index) + 1;
+      positionNextElement(payload.requestId);
+      return;
+    }
+    applyPositionElement(payload.requestId, payload);
+    return;
+  }
+
+  if (payload.type === "position-apply" || payload.type === "position-one") {
+    const job = state._positionJob;
+    if (!job || state.activeRequestId !== payload.requestId) return;
+    const item = job.placements[Number(payload.index)];
+    const afterBounds = payload.afterBounds;
+    const afterL = afterBounds ? unitValueToNumber(afterBounds[0]) : unitValueToNumber(payload.afterL);
+    const afterT = afterBounds ? unitValueToNumber(afterBounds[1]) : unitValueToNumber(payload.afterT);
+    const afterR = afterBounds ? unitValueToNumber(afterBounds[2]) : NaN;
+    const afterB = afterBounds ? unitValueToNumber(afterBounds[3]) : NaN;
+    const targetX = item ? Number(item.x) || 0 : Number(payload.targetX) || 0;
+    const targetY = item ? Number(item.y) || 0 : Number(payload.targetY) || 0;
+    if (!payload.ok) {
+      failActiveRequest(payload.message || "Could not position the elements.");
+      return;
+    }
+    if (payload.found) job.positioned += 1;
+    else if (payload.name) job.missing.push(payload.name);
+    job.index = Number(payload.index) + 1;
+    positionNextElement(payload.requestId);
+    return;
+  }
+
   if (payload.type === "position-done") {
     if (!payload.ok) {
       failActiveRequest(payload.message || "Could not position the elements.");
       return;
     }
-    completePositionJob(payload);
+    // Legacy single-script reply — keep for older panel caches.
+    if (state._positionJob) {
+      state._positionJob.positioned = Number(payload.positioned) || 0;
+      state._positionJob.missing = Array.isArray(payload.missing)
+        ? payload.missing
+        : [];
+      state._positionJob.index = state._positionJob.placements.length;
+    }
+    completePositionJob();
     return;
   }
 
@@ -3727,30 +4476,10 @@ function bindEvents() {
       if (button.dataset.run === "scan" || button.dataset.run === "generate-mask") {
         beginScan("generate");
       }
-      if (button.dataset.run === "restore-mask") beginScan("restore");
       if (button.dataset.run === "export") beginExport();
       if (button.dataset.run === "import-elements") beginImportElements();
       if (button.dataset.run === "position-elements") beginPositionElements();
-      if (button.dataset.run === "load-data-layer") loadDataLayerFromSelection();
       if (button.dataset.run === "load-data-file") loadDataFileFromFolderOrPicker();
-    });
-  });
-
-  document.querySelectorAll("[data-destination]").forEach((button) => {
-    button.addEventListener("click", () => {
-      const next = button.dataset.destination;
-      if (next !== "folder" && next !== "zip") return;
-      state.destination = next;
-      if (state.statusKind !== "working") {
-        state.statusKind = "idle";
-        state.statusText =
-          next === "zip"
-            ? "ZIP mode will download one archive of cropped PNGs."
-            : state.folderName
-              ? `Folder ready: “${state.folderName}”.`
-              : "Choose an export folder, or switch to ZIP.";
-      }
-      render();
     });
   });
 
@@ -3770,6 +4499,10 @@ function bindEvents() {
         randomizePreviewColors();
         return;
       }
+      if (action === "reassign") {
+        reassignElementsAction();
+        return;
+      }
       if (action === "sample") {
         state.editTool = "sample";
         clearPreviewHover();
@@ -3784,16 +4517,8 @@ function bindEvents() {
         if (state.scan) drawPreview(state.scan);
         return;
       }
-      if (action === "sample-new") {
-        state.sampledLabel = "new";
-        state.editTool = "fill";
-        clearPreviewHover();
-        updatePreviewChrome();
-        if (state.scan) drawPreview(state.scan);
-        return;
-      }
-      if (action === "update") {
-        commitPreviewEdits();
+      if (action === "save-data") {
+        saveSplitDataAction();
       }
     });
   });
@@ -3813,9 +4538,7 @@ function bindEvents() {
       readInputs();
       if (state.statusKind !== "working") {
         state.statusKind = "idle";
-        state.statusText = hasLoadedSplitData()
-          ? "Adjust thresholds if needed, then Restore or Generate ID Mask."
-          : "Adjust thresholds if needed, then Generate ID Mask.";
+        state.statusText = "Adjust thresholds if needed, then Generate ID Mask.";
       }
     });
     input.addEventListener("change", () => {
@@ -3845,16 +4568,21 @@ async function handlePickerMessage(event) {
     state.folderPermission = "granted";
     state.statusKind = "ok";
     state.statusText = `Using “${state.folderName}” for direct exports.`;
+    state.bootHint = `Checking “${state.folderName}” for ${DATA.DATA_FILENAME}…`;
+    render();
     await readFolderSplitData();
     if (
       state.folderData &&
       (!state.latestSplitData || !state.latestSplitData.exported)
     ) {
       if (state.folderData.elements && state.folderData.elements.length) {
-        applyLoadedSplitData(state.folderData, "folder");
+        await applyLoadedSplitData(state.folderData, "folder");
       } else {
         applyRestoredSettings(state.folderData, "folder");
+        state.bootHint = `Found ${DATA.DATA_FILENAME} (settings only).`;
       }
+    } else if (!state.folderData) {
+      state.bootHint = `No ${DATA.DATA_FILENAME} in “${state.folderName}” yet.`;
     }
     render();
 
@@ -3867,6 +4595,7 @@ async function handlePickerMessage(event) {
     state.afterFolderChoice = null;
     if (resume === "import") beginImportElements();
     if (resume === "position") beginPositionElements();
+    if (resume === "save-data") saveSplitDataAction();
     return;
   }
 
@@ -3880,10 +4609,11 @@ async function handlePickerMessage(event) {
     }
     try {
       const parsed = JSON.parse(text);
-      if (!applyLoadedSplitData(parsed, "file")) {
+      if (!(await applyLoadedSplitData(parsed, "file"))) {
         render();
         return;
       }
+      if (event.data.name) state.dataFileName = String(event.data.name);
       render();
     } catch {
       state.statusKind = "error";
@@ -3899,7 +4629,7 @@ async function handlePickerMessage(event) {
     state.statusKind = "error";
     state.statusText =
       event.data.reason === "unsupported"
-        ? "Folder access is unavailable. Switch destination to ZIP."
+        ? "Folder access is unavailable in this browser."
         : event.data.reason === "json-cancelled"
           ? "No data file was selected."
           : "No export folder was selected.";
@@ -3930,7 +4660,9 @@ window.addEventListener("message", (event) => {
     return;
   }
 
-  if (!state.embedded || event.source !== window.parent) return;
+  if (!state.embedded || event.source !== window.parent) {
+    return;
+  }
 
   const binary = binaryFromMessage(event.data);
   if (binary) {
@@ -3943,7 +4675,9 @@ window.addEventListener("message", (event) => {
     return;
   }
 
-  if (typeof event.data !== "string") return;
+  if (typeof event.data !== "string") {
+    return;
+  }
 
   if (event.data.startsWith(MESSAGE_PREFIX)) {
     try {
@@ -3974,24 +4708,13 @@ function canRestoreSettings() {
 
 async function restoreSavedSettings() {
   if (!canRestoreSettings()) return false;
-  if (state.embedded) {
-    const layerData = await requestDataLayerRead();
-    if (!canRestoreSettings()) return false;
-    if (layerData) {
-      if (layerData.elements && layerData.elements.length) {
-        applyLoadedSplitData(layerData, "document");
-      } else {
-        applyRestoredSettings(layerData, "document");
-      }
-      render();
-      return true;
-    }
-  }
+  // Folder JSON is the only auto-restore source (no data layer).
   if (state.folderData) {
     if (state.folderData.elements && state.folderData.elements.length) {
-      applyLoadedSplitData(state.folderData, "folder");
+      await applyLoadedSplitData(state.folderData, "folder");
     } else {
       applyRestoredSettings(state.folderData, "folder");
+      state.bootHint = `Found ${DATA.DATA_FILENAME} (settings only).`;
     }
     render();
     return true;
@@ -4001,33 +4724,27 @@ async function restoreSavedSettings() {
 
 async function bootstrapPanel() {
   // Paint first so the panel is usable even if storage or Photopea is slow.
+  state.bootHint = "Looking for a remembered export folder…";
   render();
   try {
     await loadStoredDirectoryHandle();
     if (state.folderPermission === "granted") {
+      state.bootHint = `Reading ${DATA.DATA_FILENAME} from “${state.folderName}”…`;
+      render();
       await readFolderSplitData();
+      if (!state.folderData) {
+        state.bootHint = `No ${DATA.DATA_FILENAME} in “${state.folderName}” yet.`;
+      }
+    } else {
+      state.bootHint = "Choose an export folder to load saved data automatically.";
     }
   } catch {
-    // Folder memory is optional.
+    state.bootHint = "Folder memory unavailable in this browser.";
   }
   render();
 
-  if (!state.embedded) {
-    await restoreSavedSettings();
-    return;
-  }
-
-  // Photopea may not accept scripts the instant the panel loads, so the silent
-  // restore is deferred and retried once instead of holding the panel hostage.
-  const attempt = async () => {
-    if (await restoreSavedSettings()) return;
-    window.setTimeout(() => {
-      restoreSavedSettings().catch(() => {});
-    }, 2500);
-  };
-  window.setTimeout(() => {
-    attempt().catch(() => {});
-  }, 400);
+  // Auto-load folder data (+ ID mask) once folder JSON is available.
+  await restoreSavedSettings();
 }
 
 bootstrapPanel();
